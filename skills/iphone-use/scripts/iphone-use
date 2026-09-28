@@ -1,0 +1,117 @@
+#!/bin/sh
+# Runs the iphone-use CLI, building it on first use.
+#
+# The skill ships as source, not as a binary: every user already has Xcode (the tool needs its
+# frameworks at runtime), so building locally avoids code signing, notarization and universal
+# builds, and the binary is exactly the source you can read.
+#
+# Lookup order:
+#   1. IPHONE_USE_BIN, or a real (non-script) iphone-use on PATH whose --version matches, e.g. a
+#      Homebrew or manual install.
+#   2. A cached build for this version in ~/.cache/iphone-use/<version>/.
+#   3. Build from the enclosing repository (Claude Code plugin installs ship the whole repo).
+#   4. Clone the matching tag and build (installs that copied only the skill folder, e.g. `npx skills`).
+#
+# Every build is keyed by VERSION, which ships in the same folder as SKILL.md, so the binary an agent
+# runs always matches the instructions it reads.
+#
+# Keep VERSION in sync with .claude-plugin/plugin.json and IPhoneUse.swift (see AGENTS.md).
+set -eu
+
+VERSION=0.1.0
+REPO_URL=https://github.com/sunghyun-k/iphone-use.git
+
+say() { printf 'iphone-use: %s\n' "$*" >&2; }
+
+if [ -n "${IPHONE_USE_BIN:-}" ]; then
+    exec "$IPHONE_USE_BIN" "$@"
+fi
+
+# 1. A real binary on PATH. Skip shell scripts: the plugin's bin/iphone-use is on PATH too and
+# points back here, so taking it would loop forever. Only take it if it is the version this skill
+# was written for: SKILL.md quotes command output, and an older or newer CLI would contradict it.
+old_ifs=$IFS
+IFS=:
+for dir in $PATH; do
+    candidate="$dir/iphone-use"
+    if [ -x "$candidate" ] && [ ! -d "$candidate" ] && [ "$(head -c 2 "$candidate" 2>/dev/null)" != "#!" ]; then
+        IFS=$old_ifs
+        found=$("$candidate" --version 2>/dev/null || true)
+        if [ "$found" = "$VERSION" ]; then
+            exec "$candidate" "$@"
+        fi
+        path_mismatch="$candidate ($found)"
+        break
+    fi
+done
+IFS=$old_ifs
+
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/iphone-use/$VERSION"
+binary="$cache/iphone-use"
+
+# 2. Cached build.
+if [ -x "$binary" ]; then
+    exec "$binary" "$@"
+fi
+
+if ! command -v swift >/dev/null 2>&1; then
+    say "Swift is not available. Install Xcode (iphone-use needs it anyway) and run 'xcode-select -s /Applications/Xcode.app'."
+    exit 1
+fi
+
+mkdir -p "$cache"
+
+# Two commands started at once would build into the same directory. mkdir is atomic, so use it as a
+# lock. A lock older than 15 minutes is left over from an interrupted build.
+lock="$cache/.lock"
+waited=0
+while ! mkdir "$lock" 2>/dev/null; do
+    if [ -n "$(find "$lock" -maxdepth 0 -mmin +15 2>/dev/null)" ]; then
+        rmdir "$lock" 2>/dev/null || true
+        continue
+    fi
+    [ "$waited" -eq 0 ] && say "Another command is building iphone-use; waiting..."
+    waited=1
+    sleep 2
+done
+trap 'rmdir "$lock" 2>/dev/null || true' EXIT INT TERM
+
+if [ ! -x "$binary" ]; then
+    # 3. Source next to this script (plugin install or a repository checkout):
+    # <root>/skills/iphone-use/scripts/iphone-use
+    here=$(cd "$(dirname "$0")" && pwd -P)
+    source_dir=$(cd "$here/../../.." && pwd -P)
+    if [ ! -f "$source_dir/Package.swift" ] || ! grep -q '"iphone-use"' "$source_dir/Package.swift"; then
+        # 4. Only the skill folder was installed. Fetch the source for this version.
+        source_dir="$cache/src"
+        if [ ! -f "$source_dir/Package.swift" ]; then
+            rm -rf "$source_dir"
+            say "Fetching source v$VERSION..."
+            # No fallback to the default branch: that build would be cached as $VERSION and never be
+            # replaced, even after the tag appears.
+            if ! git clone --quiet --depth 1 --branch "v$VERSION" "$REPO_URL" "$source_dir" 2>/dev/null; then
+                rm -rf "$source_dir"
+                say "Could not fetch tag v$VERSION from $REPO_URL (no network, or the release isn't published yet)."
+                exit 1
+            fi
+        fi
+    fi
+
+    if [ -n "${path_mismatch:-}" ]; then
+        say "Not using $path_mismatch: this skill is for $VERSION."
+    fi
+    say "Building iphone-use $VERSION (first run only, about a minute)..."
+    if ! swift build -c release --package-path "$source_dir" --scratch-path "$cache/build" >"$cache/build.log" 2>&1; then
+        say "Build failed. Log: $cache/build.log"
+        tail -n 20 "$cache/build.log" >&2
+        say "If it mentions the Xcode license, run 'sudo xcodebuild -license accept' and try again."
+        exit 1
+    fi
+    cp "$cache/build/release/iphone-use" "$binary.tmp"
+    mv "$binary.tmp" "$binary"
+    say "Built $binary"
+fi
+
+rmdir "$lock" 2>/dev/null || true
+trap - EXIT INT TERM
+exec "$binary" "$@"

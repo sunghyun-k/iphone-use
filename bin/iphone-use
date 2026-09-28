@@ -1,0 +1,4 @@
+#!/bin/sh
+# Claude Code puts a plugin's bin/ on PATH. Hand over to the skill's wrapper, which finds or builds
+# the real binary. A script rather than a symlink, so it keeps working however the plugin is copied.
+exec sh "$(cd "$(dirname "$0")" && pwd -P)/../skills/iphone-use/scripts/iphone-use" "$@"

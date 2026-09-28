@@ -1,0 +1,15 @@
+{
+  "name": "iphone-use",
+  "description": "iphone-use: operate real iPhones and iPads from coding agents.",
+  "owner": {
+    "name": "Sunghyun Kim"
+  },
+  "plugins": [
+    {
+      "name": "iphone-use",
+      "source": "./",
+      "description": "See and operate a real iPhone or iPad over USB or Wi-Fi through its accessibility list.",
+      "version": "0.1.0"
+    }
+  ]
+}
