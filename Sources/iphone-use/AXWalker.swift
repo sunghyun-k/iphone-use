@@ -219,13 +219,23 @@ final class AXWalker {
 
     // MARK: - Measuring
 
-    /// Rect of the currently focused element (`token`), in screenshot pixels.
+    /// Clears the boxes, so a frame shows the screen as it is. `measure` leaves the yellow preview box up.
+    /// Focus moves draw the green box again only while visuals are on, so they are turned back on.
+    func captureWithoutBoxes(rsd: RemoteServiceDiscovery) throws -> CGImage {
+        try session.invoke("deviceInspectorShowVisuals:", [false], expectsReply: false)
+        Thread.sleep(forTimeInterval: 0.15)
+        defer { _ = try? session.invoke("deviceInspectorShowVisuals:", [true], expectsReply: false) }
+        return try ScreenCapture.image(rsd: rsd)
+    }
+
+    /// Rect of the currently focused element (`token`), in screenshot pixels, and a frame of the screen
+    /// without the box at the time of measuring (to check before tapping that nothing moved since).
     ///
     /// Measure with the green focus box first. If that fails, measure again with the yellow preview box —
     /// on green-heavy backgrounds (green icons/buttons) the green box makes little difference. The green box
     /// is drawn **only when focus changes**, so the preview is the only way to get something redrawn
     /// (PITFALLS #37).
-    func measure(_ token: Data, rsd: RemoteServiceDiscovery) throws -> CGRect? {
+    func measure(_ token: Data, rsd: RemoteServiceDiscovery) throws -> (rect: CGRect, frame: CGImage)? {
         // Fast path: one frame with the box shown, one with it hidden. A capture is 0.5 s, so waiting for the
         // screen to settle first would add a second. Instead we check that the area around the box is the
         // same in both frames — if the screen was still scrolling to follow focus, content near the element
@@ -245,7 +255,7 @@ final class AXWalker {
                 shown, hidden, ignoring: rect.insetBy(dx: -24, dy: -24),
                 within: rect.insetBy(dx: -160, dy: -160))) == true
         {
-            return rect
+            return (rect, hidden)
         }
 
         // Slow path: the box can't be redrawn on a settled screen (it's only drawn when focus changes), so use
@@ -257,7 +267,7 @@ final class AXWalker {
         for attempt in 0..<8 {
             Thread.sleep(forTimeInterval: attempt == 0 ? 0.15 : 0.3)
             if let rect = Self.yellowBox(before: hidden, after: try ScreenCapture.image(rsd: rsd)) {
-                return rect
+                return (rect, hidden)
             }
         }
         return nil

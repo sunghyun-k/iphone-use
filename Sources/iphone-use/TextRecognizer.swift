@@ -44,7 +44,7 @@ enum TextRecognizer {
 
     /// The top edge (pixel y) of the on-screen keyboard if it's up, otherwise nil.
     ///
-    /// OCR picks up keyboard keys as single-character lines like "Q", "W", "ㅂ", several per row. The first
+    /// OCR picks up keyboard keys as single-character lines like "Q", "W" or a single Hangul jamo, several per row. The first
     /// row with more than four single-character lines side by side is taken as the top key row, and we move
     /// up further by the suggestion bar / toolbar allowance (14% of screen height). Once, with the keyboard up,
     /// a `scroll` in the middle of the screen landed its swipe on the keys and typed "G" into a search field.

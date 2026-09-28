@@ -92,6 +92,7 @@ enum UIError: Error, CustomStringConvertible, KeepsSession {
     case actionNotTappable(String, ref: Int)
     case revealLost
     case rowNotSwipeable(String)
+    case moving(String)
 
     var description: String {
         switch self {
@@ -109,7 +110,7 @@ enum UIError: Error, CustomStringConvertible, KeepsSession {
                 have no size). Did not press. Look at a screenshot and press it with touch X Y.
                 """
         case .homeScreen:
-            return "There is no back on the home screen (an edge swipe opens the widget screen). Open apps with launch."
+            return "There is no back on the home screen. Open apps with launch."
         case .noKeyboard:
             return """
                 The on-screen keyboard did not appear — this doesn't look like a text field. Did not type (typing \
@@ -123,6 +124,11 @@ enum UIError: Error, CustomStringConvertible, KeepsSession {
             return """
                 The rect of "\(caption)" doesn't look like a row (too thin, or under the top/bottom bar). Did not \
                 swipe — it could hit the wrong row. Use scroll to bring that row near the middle and run ui again.
+                """
+        case .moving(let caption):
+            return """
+                "\(caption)" kept moving on screen after it was measured (the list scrolled or content loaded \
+                above it). Did not press. Run ui and try again.
                 """
         case .revealLost:
             return "The revealed button's position is unknown (it closed or the list moved). Did not press. --swipe that row again."
@@ -353,14 +359,30 @@ final class UIScreen {
     }
 
     /// Measures the currently focused element. If it can't be measured, stop without pressing.
+    ///
+    /// Before returning, one more frame checks that the element's area still looks the same as when it was
+    /// measured. In a messenger's chat list the rows moved after measuring and the tap opened the chat
+    /// three rows above the one asked for (PITFALLS #42). If it moved, wait for the screen to settle, step
+    /// away and back so the green box is drawn where the element is now, and measure again. If it keeps
+    /// moving, stop: tapping an old rect is exactly what opened the wrong chat.
     func measure(_ item: AXWalker.Item) throws -> CGRect {
-        // A side under 24px (8pt) is a box fragment, not an element — a chat row stuck under the bottom tab
-        // bar measured as a 16px strip, and swiping there opened **a different chat below it**. Don't press
-        // such rects.
-        guard let rect = try walker.measure(item.token, rsd: rsd()), rect.width >= 24, rect.height >= 24 else {
-            throw UIError.noRect(item.caption)
+        var item = item
+        for attempt in 0..<3 {
+            // A side under 24px (8pt) is a box fragment, not an element — a chat row stuck under the bottom
+            // tab bar measured as a 16px strip, and swiping there opened **a different chat below it**.
+            // Don't press such rects.
+            guard let (rect, frame) = try walker.measure(item.token, rsd: rsd()), rect.width >= 24,
+                rect.height >= 24
+            else { throw UIError.noRect(item.caption) }
+            let now = try walker.captureWithoutBoxes(rsd: rsd())
+            if ScreenCapture.sameArea(frame, now, in: rect.insetBy(dx: 0, dy: -rect.height / 2)) { return rect }
+            guard attempt < 2 else { break }
+            _ = try ScreenCapture.settled(rsd: rsd(), timeout: 3)
+            // Without a known position (`back` walks on its own), measuring again falls back to the
+            // yellow preview box.
+            if let cursor = state.cursor, state.entries.indices.contains(cursor) { item = try go(to: cursor) }
         }
-        return rect
+        throw UIError.moving(item.caption)
     }
 
     /// Waits until the input reaches the device and the screen settles.
@@ -407,11 +429,11 @@ final class UIScreen {
             // then measured exactly 1110,1120 150x150 after stepping away and back). So step away and back
             // once more and measure. If it measures outside the row's height, it's not a button (something
             // in a neighboring row).
-            var rect = try? walker.measure(item.token, rsd: rsd())
+            var rect = try? walker.measure(item.token, rsd: rsd())?.rect
             if rect == nil, try walker.move(.previous) != nil, let again = try walker.move(.next),
                 again.hex == item.hex || again.caption == item.caption
             {
-                rect = try? walker.measure(again.token, rsd: rsd())
+                rect = try? walker.measure(again.token, rsd: rsd())?.rect
             }
             if let rect, !(rect.midY > row.minY && rect.midY < row.maxY) { break }
             found.append((item, rect))
@@ -593,12 +615,20 @@ final class UIScreen {
         guard !state.entries.isEmpty else { throw UIError.noList }
         if state.anchoredAtEnd { return try moreEarlier() }
         let start = state.shown
-        if state.entries.count < start + Self.page, !state.done {
+        try extend(to: start + Self.page)
+        let end = min(start + Self.page, state.entries.count)
+        state.shown = end
+        return state.entries[start..<end]
+    }
+
+    /// Walks on from the last swept element until the list holds `count` elements or wraps around.
+    private func extend(to count: Int) throws {
+        if state.entries.count < count, !state.done {
             try go(to: state.entries.count - 1)
             var known = Dictionary(
                 state.entries.enumerated().map { ($0.element.token, $0.offset) },
                 uniquingKeysWith: { first, _ in first })
-            while state.entries.count < start + Self.page {
+            while state.entries.count < count {
                 state.cursor = nil
                 guard let item = try walker.move(.next) else { break }
                 // Wrapped around: a token we've seen, or back at the first element (its token may have
@@ -617,9 +647,6 @@ final class UIScreen {
                 state.cursor = state.entries.count - 1
             }
         }
-        let end = min(start + Self.page, state.entries.count)
-        state.shown = end
-        return state.entries[start..<end]
     }
 
     /// `more` for a list taken from the end: walks on backward from the earliest element and puts what it
@@ -656,23 +683,35 @@ final class UIScreen {
         return state.entries[(count - end)..<(count - start)]
     }
 
-    /// Elements whose description contains `text`. Searches the already-swept list first; if nothing, sweeps
-    /// on to the end (at most `findLimit`). Since it only walks as far as needed, it often doesn't go to the end.
-    static let findLimit = 300
+    /// Elements whose description contains `text`, and whether the sweep stopped at `findLimit` before
+    /// reaching the end. Searches the already-swept list first; if nothing, sweeps from the start up to
+    /// `findLimit`. `continuing` (`ui --find --more`) walks on from the end of the list for another
+    /// `findLimit` instead and returns only what it found there.
+    ///
+    /// The limit was 300, which made a search for something that isn't there take 15 s or more; one
+    /// Settings screen with the keyboard up is about 80 elements, so 100 covers a screen and a long list is
+    /// searched on in steps.
+    static let findLimit = 100
 
-    func find(_ text: String) throws -> [UIState.Entry] {
-        func hits() -> [UIState.Entry] {
-            state.entries.filter { $0.caption.localizedCaseInsensitiveContains(text) }
+    func find(_ text: String, continuing: Bool) throws -> (hits: [UIState.Entry], stopped: Bool) {
+        func hits(from start: Int) -> [UIState.Entry] {
+            state.entries[start...].filter { $0.caption.localizedCaseInsensitiveContains(text) }
+        }
+        if continuing {
+            let start = state.entries.count
+            try extend(to: start + Self.findLimit)
+            state.shown = state.entries.count
+            return (hits(from: start), !state.done)
         }
         // Sweep from the start in one go instead of continuing (`more`). Continuing means first walking to
         // the last element with a check at every step, and on screens whose rows change even while walking
         // (ad rows in a messenger's chat list, etc.) that check failed and stopped with "screen changed".
         // One full sweep only costs the 1–2 seconds of re-walking the first 20.
-        if hits().isEmpty, !state.done || state.anchoredAtEnd {
+        if hits(from: 0).isEmpty, !state.done || state.anchoredAtEnd {
             _ = try observe(limit: Self.findLimit, fromEnd: false)
             state.shown = state.entries.count
         }
-        return hits()
+        return (hits(from: 0), !state.done)
     }
 
     // MARK: - Output

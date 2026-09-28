@@ -110,16 +110,16 @@ responding (a reboot clears it). We don't need a stream, so we never open one.
 
 Which character appears is decided by the layout the device attaches to the virtual keyboard
 (surface 512), and that layout does not follow the input source. The iPhone (iOS 27.2) is always
-Korean Dubeolsik, so `wifi` came out as `쟈랴` (the Hangul on those key positions); the iPad
+Korean Dubeolsik, so `wifi` came out as Hangul syllables (the Hangul on those key positions); the iPad
 (iOS 26.6) is always English, so the Dubeolsik keys `qoxjfl` came out literally as `qoxjfl`.
 `ctrl+space`, Caps Lock, Globe (Consumer 0x29D) and LANG1/LANG2 (0x90/0x91) switch **only the
 on-screen keyboard's language.** Typing on the Dubeolsik layout while an English input source is
-active gives uncomposed jamo such as `ㅈㅑㄹㅑ`.
+active gives uncomposed jamo instead.
 
 So `text` decomposes Hangul into Dubeolsik key positions (`HangulKeys`): on a device with a Korean
 layout you get Hangul, on one with an English layout you get Latin letters. Digits and symbols sit
 in the same positions on both layouts, so they work everywhere. Shift combinations land exactly
-(`!`, `_`, `?`, Shift+Q → `ㅃ`).
+(`!`, `_`, `?`, and Shift+Q gives the doubled jamo).
 
 There is no way to change the layout yet. CoreDevice has a `createService` that builds a new
 keyboard surface with `HIDServiceDescriptor.keyboardCountryCode`; we tried it and got blocked
@@ -200,7 +200,7 @@ We wait 0.8 s after release.
 ### 18. Press modifiers separately first
 
 If a modifier and a key share one report, the device sometimes misses the modifier: on Wi-Fi, ⌘V
-went through the Korean layout and came out as `ㅍ` (the Hangul on the V key). Send it the way a
+went through the Korean layout and came out as the Hangul jamo on the V key. Send it the way a
 person types: modifier → modifier+key → modifier → all released.
 
 ### 19. MobileDevice can't see Wi-Fi devices
@@ -322,8 +322,8 @@ now strips all kinds of whitespace.
 ### 30. Every clipboard paste shows a permission prompt
 
 Content pushed through `pasteboardservice` appears on the device as coming from `dtpasteboardd`, so
-even a ⌘V paste (user input) triggers the prompt "'설정'이(가) 'dtpasteboardd'에서 붙여넣으려고 함"
-("Settings" would like to paste from "dtpasteboardd"). An agent must not allow that prompt on the
+even a ⌘V paste (user input) triggers the prompt ""Settings" would like to paste from
+"dtpasteboardd"". An agent must not allow that prompt on the
 user's behalf, so without a person present, assume paste is blocked and use `text` first. If the user
 sets the app's "Paste from Other Apps" setting to Allow, the prompt stops appearing.
 
@@ -471,7 +471,8 @@ position left on the device to the target, then measures the rect with the green
   close button during search comes just before the keyboard keys (around 70th). A subagent called
   `--more` four times looking for the search field. Sending `previous` from the first element doesn't
   wrap and produces no event, and `last` produced none either. So `ui --find` walks from the start,
-  filtering descriptions (6 s to the end of the Settings root screen, capped at 300 elements).
+  filtering descriptions (6 s to the end of the Settings root screen). It was capped at 300 elements;
+  now 100 per call, and `ui --find … --more` searches the next 100, so a miss costs 5 s instead of 15.
 
 #### Measuring and timing
 
@@ -497,13 +498,13 @@ position left on the device to the target, then measures the rect with the green
 #### Going back
 
 - **The UIKit back button's identifier is `BackButton` regardless of language** (from the focus
-  event's `AccessibilityIdentifier_v1`). `back` tries the identifier, then an edge swipe (checking
-  that the screen changed); if neither works it presses nothing and reports the top-left element,
+  event's `AccessibilityIdentifier_v1`). `back` tries the identifier, then (since #43) a back label
+  instead of the edge swipe it once used; if neither works it presses nothing and reports the top-left element,
   because in some apps the top-left isn't Back (in some apps, e.g. a social app, it's a "side menu").
 
 #### Keyboard keys
 
-- **Keyboard keys are elements too** (`ㅂ, 사운드 재생, 키보드 키`: "ㅂ, play sound, keyboard key").
+- **Keyboard keys are elements too** (on a Korean device, a jamo followed by the Korean for "play sound, Keyboard Key").
   They come last in focus order, and the focus event has no numeric traits value, so there was no
   language-independent way to filter them. They stay in the list, and whether the keyboard is up is
   judged from single-character rows at the bottom of the screen (`TextRecognizer.keyboardVisible`;
@@ -516,7 +517,7 @@ position left on the device to the target, then measures the rect with the green
   device-side `next` in the Bluetooth list skipped the ⓘ on the AirPods row (the one on the Watch row
   sometimes appeared), and the ⓘ on a Wi-Fi row is never an element. Instead, the inspector
   `Actions_v1` field of the focus event has a custom action
-  `AXCustomAction-Name:추가 정보\nTarget:0x…\nSelector:…` ("More Info"). Running it with
+  `AXCustomAction-Name:<"More Info" in the device language>\nTarget:0x…\nSelector:…`. Running it with
   `performAction` is silently ignored, like activation (`AXAction-2010`) (#35). So it measures the
   row and taps **within 0.6× the row height from the right edge** (on a 164 px row the ⓘ center is
   100 px from the edge, confirmed by drawing on a screenshot). For Bluetooth the selector is
@@ -605,7 +606,7 @@ ones and the input field needed `--more`. In a long chat this may also make the 
   suggestion bar, then the app's own elements, so a sweep of the last 20 got only keys. Keys have the
   app's pid and no numeric traits (#38). Return, space and delete do carry language-independent
   identifiers (`Return`, `space`, `delete`), so the localized trait text is read off one of them (the
-  last part of its description, "키보드 키" / Keyboard Key) and the leading run of elements carrying it,
+  last part of its description, "Keyboard Key" in the device's language) and the leading run of elements carrying it,
   plus unnamed ones between keys, is skipped. Walks from the end (`end()`) skip it the same way.
 - **Stepping back 20 elements scrolls the chat up by 20 elements.** With the keyboard up, a message
   that had just been sent ended up off screen. After the sweep, focus walks forward to the last swept
@@ -614,6 +615,39 @@ ones and the input field needed `--more`. In a long chat this may also make the 
   finds in front, and after an action the older messages that slide into the window aren't reported as
   `added`. A list from the end applies to that screen: when an action leads to a different screen, the
   new one is listed from the start as usual.
+
+### 42. A row can move between measuring and tapping
+
+In a messenger app's chat list (iOS 27.2), `press` on a pinned chat opened the chat three rows above
+it. Measured again later, the rect was right every time, so the list most likely moved after measuring
+(not reproduced). Two things move it: an ad banner at the top loads and resizes, and the pinned rows,
+drawn at the top, come after the other rows in focus order, so walking to them scrolls the list back
+and forth.
+
+- The fast-path check in `AXWalker.measure` compares frames on the coarse 48x104 grid and only in a
+  band around the element. A list scrolled by about 320 px (one and a half rows) still passed it, because
+  neighboring chat rows look alike at that resolution.
+- Now one more frame, taken with the boxes cleared, is compared with the measuring frame over the
+  element and half a row above and below at 1/8 size (`ScreenCapture.sameArea`). The shifted list
+  changed 17% of that area; up to 4% is allowed for a blinking cursor or a badge. It costs one capture
+  (~0.6 s) per press.
+- Measuring again right away without moving focus fell back to the yellow preview box, which failed on
+  that row, and the old rect was used, which is the original bug. Now it waits for the screen to settle,
+  steps away and back so the green box is drawn at the new position, and measures again. If the element
+  is still moving after three tries, it stops with "kept moving" instead of tapping.
+
+### 43. `back`'s edge swipe ran a chat row's swipe action
+
+In a messenger app's chat list, a root screen with no back gesture, `back` found no `BackButton`
+identifier and fell through to the edge swipe, which started at 45% of the screen height. A chat row
+was there, and dragging it to the right ran the row's leading swipe action, "Mark as unread". The
+screen changed (an unread badge), so `back` even reported "Back (edge swipe)".
+
+- Moving the swipe up to navigation-bar height fixed that screen but not the idea: any swipe can land
+  on something that reacts to it. `back` no longer swipes. After the `BackButton` identifier it looks
+  for a button **labeled** as back among the first elements (the messenger's chat screen says "Previous,
+  Button" in the device's language); apps that don't use the system back button still label theirs. Only the whole name counts
+  ("Previous month" doesn't). If neither is found, it reports the top-left element and presses nothing.
 
 ## Permissions
 

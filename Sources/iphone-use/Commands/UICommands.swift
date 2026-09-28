@@ -23,23 +23,27 @@ struct UICommand: ParsableCommand {
     @Flag(name: .long, help: "Start from the last element and sweep backward, for screens that sit at their end, like a chat: lists the newest messages and the input field without scrolling to the top. --more then continues with earlier elements.")
     var last = false
 
-    @Option(name: .long, help: "Keep sweeping until an element whose description contains this text appears, and print only the matches.")
+    @Option(name: .long, help: "Sweep until an element whose description contains this text appears (up to 100), and print only the matches. With --more, search the next 100.")
     var find: String?
 
     func run() throws {
         try UIScreen.with(udid: device.udid) { screen in
             if let find {
                 // Finding elements at the end of the list, like the bottom search bar (iOS 26+) or a close
-                // button, used to take several --more calls; this makes it one. If a swept list exists,
-                // search it first.
-                if screen.state.entries.isEmpty || !more || screen.state.anchoredAtEnd {
+                // button, used to take several --more calls; this makes it one. With --more it searches on
+                // past the end of the current list.
+                let continuing = more && !screen.state.entries.isEmpty && !screen.state.anchoredAtEnd
+                if !continuing {
                     _ = try screen.observe(limit: UIScreen.page, fromEnd: false)
                     screen.state.shown = min(UIScreen.page, screen.state.entries.count)
                 }
-                let hits = try screen.find(find)
+                let (hits, stopped) = try screen.find(find, continuing: continuing)
                 print(screen.header)
-                if hits.isEmpty {
-                    print("(no element contains \"\(find)\" — checked all \(screen.state.entries.count) in the list)")
+                let count = screen.state.entries.count
+                if hits.isEmpty, stopped {
+                    print("(no element contains \"\(find)\" in the first \(count) — ui --find \"\(find)\" --more searches the next \(UIScreen.findLimit))")
+                } else if hits.isEmpty {
+                    print("(no element contains \"\(find)\" — checked all \(count) in the list)")
                 } else {
                     for entry in hits { print("@e\(entry.ref)\t\(UIScreen.caption(entry))") }
                 }
@@ -267,7 +271,6 @@ struct TypeCommand: ParsableCommand {
         discussion: """
             iphone-use type @e3 "iphone case" --enter
             iphone-use type @e3 "New Name" --clear
-            iphone-use type "아이폰 케이스"
             If the on-screen keyboard doesn't appear, nothing is typed (it's not a text field). Hangul comes out
             right when the device input source is Korean, Latin letters when it's English (switch with
             `key ctrl+space`). Characters not on the keyboard layout, like emoji, can't be typed.
@@ -353,14 +356,13 @@ struct TypeCommand: ParsableCommand {
 struct BackCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "back",
-        abstract: "Go to the previous screen (back button, then edge swipe) and report the new screen.",
+        abstract: "Go to the previous screen by pressing its back button, and report the new screen.",
         discussion: """
             1. If one of the first elements has a back/close button identifier (BackButton etc.), press it.
-            2. Otherwise swipe in from the left edge and check whether the screen changed.
-            3. If it still didn't change, don't press anything; report the element at the top-left of the
-               screen — press it if it's the back button. For sheets/modals, find a Close/Cancel button in the
-               ui list and press it.
-            Refuses on the home screen (it would open the widget screen).
+            2. Otherwise, if one of them is labeled as a back button ("Back", "Previous" or a translation), press it.
+            3. Otherwise don't press anything; report the element at the top-left of the screen — press it if
+               it's the back button. For sheets/modals, find a Close/Cancel button in the ui list and press it.
+            It never swipes. Refuses on the home screen.
             """
     )
 
@@ -374,7 +376,6 @@ struct BackCommand: ParsableCommand {
         try UIScreen.with(udid: device.udid) { screen in
             screen.state.cursor = nil
             guard let head = try screen.walker.first() else { throw ScanError.noFocusEvents }
-            // An edge swipe on the home screen opened the widget screen.
             let home = head.pid == screen.state.pid ? screen.state.isHome : isSpringBoard(head.pid, screen)
             if home { throw UIError.homeScreen }
             // If the list isn't for the current screen (after acting without a list), clear it. Otherwise the
@@ -385,49 +386,38 @@ struct BackCommand: ParsableCommand {
                 screen.state = UIState(udid: screen.state.udid)
             }
 
-            // 1. Identifier. A back button's name is the previous screen's title ("Settings") or "Back", so
-            //    names can't pick it, but UIKit's is `BackButton` in every language and custom buttons
-            //    usually have an English identifier too.
             var items = [head]
             while items.count < Self.front, let item = try screen.walker.move(.next) {
                 if item.token == head.token { break }
                 items.append(item)
             }
-            if let index = items.firstIndex(where: { Self.looksLikeBack($0.identifier) }) {
+            // 1. Identifier. A system back button's name is the previous screen's title ("Settings"), so
+            //    names can't pick it, but UIKit's identifier is `BackButton` in every language and custom
+            //    buttons usually have an English identifier too.
+            // 2. Label. Custom back buttons without an identifier still say what they are (a messenger's
+            //    chat screen names it "Previous" in the device's language).
+            //    There is no edge swipe: on a root screen it landed on a list row and ran the row's swipe
+            //    action, "Mark as unread" (PITFALLS #43).
+            let found = items.firstIndex { Self.looksLikeBack($0.identifier) }.map { ($0, "back button \(items[$0].identifier ?? "")") }
+                ?? items.firstIndex { Self.labeledBack($0.caption) }.map { ($0, "button labeled \"\(Self.name(of: items[$0].caption))\"") }
+            if let (index, how) = found {
                 let button = items[index]
                 // Walk to the button again. The green focus box is drawn when focus changes to that element.
                 _ = try screen.walker.first()
                 for _ in 0..<index { _ = try screen.walker.move(.next) }
                 try tap(try screen.measure(button), udid: device.udid)
-                print("Back (back button \(button.identifier ?? ""))")
+                print("Back (\(how))")
                 try screen.settle()
-                screen.printReport(try screen.observe(limit: UIScreen.page))
-                return
-            }
-
-            // 2. Edge swipe. Some apps block the gesture, so check whether the screen changed.
-            let before = try ScreenCapture.image(rsd: screen.rsd())
-            let input = try InputSession.open(udid: device.udid)
-            // The system back gesture only takes it if it starts just inside the outer 4 pixels (see swipe help).
-            try input.hid.swipe(
-                from: input.normalized(6, input.screen.height * 0.45),
-                to: input.normalized(input.screen.width * 0.75, input.screen.height * 0.45),
-                duration: 0.3)
-            let (width, height) = (input.screen.width, input.screen.height)
-            input.close()
-            Thread.sleep(forTimeInterval: 0.3)
-            let after = try ScreenCapture.settled(rsd: screen.rsd(), timeout: 6)
-            if try !ScreenCapture.unchanged(before, after.image, ignoring: after.moving) {
-                print("Back (edge swipe)")
                 screen.printReport(try screen.observe(limit: UIScreen.page))
                 return
             }
 
             // 3. Top-left element. Likely the back button, but it could be a side menu or profile (some apps,
             //    e.g. a social app, put a "side menu" there), so report it instead of pressing.
-            print("Could not go back — no back button identifier, and the edge swipe had no effect.")
+            print("Could not go back — no element with a back button identifier or label.")
             _ = try screen.observe(limit: UIScreen.page)
-            let corner = try topLeft(screen, width: width, height: height)
+            let size = try ScreenCapture.image(rsd: screen.rsd())
+            let corner = try topLeft(screen, width: Double(size.width), height: Double(size.height))
             if let corner {
                 print("Top-left element: @e\(corner.ref)\t\(corner.caption)")
                 print("If it's the back button, press @e\(corner.ref). Otherwise pick a Close/Cancel button from the list below.")
@@ -437,6 +427,23 @@ struct BackCommand: ParsableCommand {
             print(screen.header)
             screen.printPage(screen.state.entries.prefix(UIScreen.page))
         }
+    }
+
+    /// Names of back buttons as apps label them. Kept in the device's languages because they're compared
+    /// against what the device reads out.
+    static let backLabels: Set<String> = [
+        "back", "go back", "previous", "뒤로", "뒤로 가기", "뒤로가기", "이전", "이전 화면", "戻る", "返回",
+        "zurück", "retour", "atrás", "volver", "indietro", "voltar",
+    ]
+
+    /// The name part of a description ("Back, Button" → "Back").
+    static func name(of caption: String) -> String {
+        caption.components(separatedBy: ", ").first?.trimmingCharacters(in: .whitespaces) ?? ""
+    }
+
+    /// Only the whole name counts, so "Previous month" or "Back up now" isn't taken for a back button.
+    static func labeledBack(_ caption: String) -> Bool {
+        backLabels.contains(name(of: caption).lowercased())
     }
 
     /// Identifiers that look like a back/close button. Filters out "back" inside a word, like "playback".

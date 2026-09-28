@@ -72,7 +72,7 @@ iphone-use ui                 # first 20
 # …
 # (more — ui --more)
 iphone-use ui --more          # next 20 (@e21 onward)
-iphone-use ui --find "Search"  # only elements whose description contains this; keeps sweeping to the end
+iphone-use ui --find "Search"  # only elements whose description contains this; sweeps up to 100
 iphone-use ui --last          # the last 20 instead: a chat's newest messages and its input field
 iphone-use press @e12         # press → reports the resulting screen
 iphone-use type @e36 "Battery" # tap the field and type
@@ -83,8 +83,8 @@ iphone-use back               # previous screen
 
 - Each line is `@eN<TAB>description`. The description is **"name, value, traits"**, as VoiceOver
   would read it.
-- The description is **in the device's language.** An English device says `Button`; a Korean device
-  says `버튼`.
+- The description is **in the device's language.** An English device says `Button`; other devices say
+  it in their own language.
 - Traits tell you what the element is: `Button`, `Toggle`, `Search Field`, `Text Field`, `Heading`
   (a title), `Static Text` (text you can't press).
 - A toggle's value is `0` (off) or `1` (on).
@@ -102,9 +102,12 @@ iphone-use back               # previous screen
 - **If you know what you're looking for, use `ui --find "text"`.** It is faster than calling `--more`
   repeatedly. Even going to the end takes only a few seconds.
   - It matches any text in the description, name or trait, case-insensitively.
+  - It looks at the first 100 elements. `(no element contains "…" in the first 100 — ui --find "…" --more
+    searches the next 100)` means it stopped there, not that the element doesn't exist: run the
+    `--more` it suggests for long lists. `checked all N in the list` means it really isn't there.
   - **On iOS 26+ the Settings search field sits at the very bottom of the screen**, so it shows up at
     the end of the list, around item 40. It isn't missing just because it's not in the first 20. Find
-    it with `ui --find "Search Field"` (Korean devices: `ui --find "검색 필드"`).
+    it with `ui --find "Search Field"` (on other languages, use the translated trait name).
 - **Chats: use `--last`.** A chat opens scrolled to its newest message, but the list runs from the
   top, so plain `ui` scrolls the chat up to its oldest messages and lists those first. `ui --last`
   lists the last 20 elements (newest messages, then the input field and send button) and leaves the
@@ -154,6 +157,7 @@ removed	@e2	Battery, Button, Static Text
 |---|---|
 | "The screen changed since the list was taken" | Your list is from an old screen: the user touched the device, or you acted with `--no-ui`. Run `ui` again |
 | "@eN is not in the list" | Wrong ref. Use a ref from the `ui` list |
+| "kept moving on screen after it was measured" | The list scrolled or something loaded above the element. Nothing was pressed. Run `ui` and press again |
 | "could not measure the element" | The element is covered or has no size. See "Screens with poor accessibility" |
 | "The on-screen keyboard did not appear" | What you pressed isn't a text field. Find a `Search Field`/`Text Field` with `ui --find "Field"` and use `type @eN` |
 | "There is no back on the home screen" | Open apps with `launch` |
@@ -163,7 +167,7 @@ removed	@e2	Battery, Button, Static Text
 ```
 iphone-use ui [--more]                            # element list, 20 at a time (@eN<TAB>description)
 iphone-use ui --last                              # the last 20 (chats: newest messages); --more goes earlier
-iphone-use ui --find "text"                       # only elements containing the text (sweeps to the end)
+iphone-use ui --find "text" [--more]              # only elements containing the text (up to 100; --more: the next 100)
 iphone-use press @eN [--hold 0.8] [--no-ui]       # press; --hold 0.6 or more is a long press
 iphone-use press @eN --last                       # press, then list the result from the end (opening a chat)
 iphone-use press @eN --action "More Info"         # the row's ⓘ button (see "Row-end buttons")
@@ -230,11 +234,12 @@ iphone-use paste "🙂" [--file f] / clipboard [-o backup.txt]
 `back` tries these in order and says which one it used.
 
 1. Press a leading element whose **identifier marks it as a back or close button** (`BackButton` and
-   the like). A back button's name is usually the previous screen's title ("Settings"), not "Back", so
-   names can't be used to find it.
-2. Otherwise, swipe in from the left edge and check whether the screen changed.
-3. If nothing changed, it **doesn't press anything**. It says "Could not go back" and shows the
-   top-left element.
+   the like). A system back button's name is usually the previous screen's title ("Settings"), not
+   "Back", so its name alone can't find it.
+2. Otherwise, press a leading element **named** as a back button ("Back", "Previous" or a translation). Apps with
+   their own back button usually name it that way.
+3. Otherwise it **doesn't press anything**. It says "Could not go back" and shows the top-left element.
+   It never swipes.
    - If that element is a back button (a `<` shape, named "Back" or the previous title), `press` it.
    - For sheets and popups, find Close, Cancel or Done with `ui --find Close` and press it.
    - The top-left element can also be something that isn't back, such as a side menu or a profile
@@ -260,7 +265,7 @@ iphone-use paste "🙂" [--file f] / clipboard [-o backup.txt]
   | Device layout | Works | Comes out wrong |
   |---|---|---|
   | English | Latin letters, digits, symbols | Hangul → Latin letters like `qoxjfl` |
-  | Korean (Dubeolsik) | Hangul, digits, symbols | Latin letters → jamo like `쟈랴` |
+  | Korean (Dubeolsik) | Hangul, digits, symbols | Latin letters → Hangul jamo |
 
   If the text came out wrong (visible in the `changed` line), retype it with
   `type @eN "…" --clear`, or find a way that needs no typing:
@@ -288,7 +293,7 @@ iphone-use press @e6 --trailing             # Wi-Fi etc., when --action stops be
 - AirPods also have their own menu on the Settings first screen, under their name, which is faster.
 - `--trailing` just presses the element's right end. Use it only when the `[actions: …]` entry is a
   row-end button like the ⓘ.
-- The action name is in the device's language (e.g. `추가 정보` on a Korean device). Pass it as shown.
+- The action name is in the device's language (e.g. the Korean for "More Info" on a Korean device). Pass it as shown.
 
 ### Buttons revealed by swiping (Delete in Messages, Mail, etc.)
 

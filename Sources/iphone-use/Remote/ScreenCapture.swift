@@ -171,6 +171,32 @@ enum ScreenCapture {
         return count <= 2
     }
 
+    /// Does `rect` (pixels) look the same in both frames? Compared at 1/8 size in grayscale; up to 4% of
+    /// it may differ (a blinking cursor, a badge), while a list that moved by a row changed about 17%. `unchanged` works on a coarse
+    /// grid and only around the element, and a chat list scrolled by a row and a half still passed it:
+    /// neighboring rows look alike at that resolution (PITFALLS #42).
+    static func sameArea(_ a: CGImage, _ b: CGImage, in rect: CGRect) -> Bool {
+        let bounds = rect.intersection(CGRect(x: 0, y: 0, width: a.width, height: a.height)).integral
+        guard !bounds.isEmpty, a.width == b.width, a.height == b.height,
+            let pixelsA = gray(a, bounds), let pixelsB = gray(b, bounds)
+        else { return false }
+        let changed = zip(pixelsA, pixelsB).filter { abs(Int($0) - Int($1)) > 32 }.count
+        return changed * 25 <= pixelsA.count
+    }
+
+    private static func gray(_ image: CGImage, _ rect: CGRect) -> [UInt8]? {
+        let width = max(1, Int(rect.width) / 8)
+        let height = max(1, Int(rect.height) / 8)
+        guard let cropped = image.cropping(to: rect),
+            let context = CGContext(
+                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width,
+                space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)
+        else { return nil }
+        context.draw(cropped, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let data = context.data else { return nil }
+        return Array(UnsafeBufferPointer(start: data.assumingMemoryBound(to: UInt8.self), count: width * height))
+    }
+
     /// `signature` grid size. Fitted to the iPhone's portrait ratio (still enough for comparing on iPad landscape).
     private static let signatureWidth = 48
     private static let signatureHeight = 104
