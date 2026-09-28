@@ -9,7 +9,7 @@ struct IPhoneUse: ParsableCommand {
             Runs on the private stack used by Xcode's Device Hub and Accessibility Inspector.
             Needs no entitlements and no sudo, but the device must be paired and trusted.
             """,
-        version: "0.1.0",
+        version: "0.2.0",
         subcommands: [
             // See and act through accessibility (the default)
             UICommand.self, PressCommand.self, TypeCommand.self, BackCommand.self, HomeCommand.self,
