@@ -43,13 +43,17 @@ struct UIState: Codable {
     var cursor: Int?
     /// How many have been shown to the caller. `ui --more` continues from here.
     var shown = 0
-    /// Swept to the end (wrapped around once).
+    /// Swept to the end (wrapped around once). With `fromEnd`, swept back to the first element.
     var done = false
+    /// Taken from the last element backward (`ui --last`). `shown` then counts from the end, `--more`
+    /// continues toward earlier elements, and walks start from the last element. nil in old list files.
+    var fromEnd: Bool?
     var nextRef = 1
 
     init(udid: String) { self.udid = udid }
 
     var isHome: Bool { app == "SpringBoard" }
+    var anchoredAtEnd: Bool { fromEnd == true }
 
     static func url(udid: String) -> URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -212,10 +216,12 @@ final class UIScreen {
     /// occurrence index in the list disambiguates. Landing in another app means the screen changed.
     private func seek(_ wanted: UIState.Entry) throws -> AXWalker.Item {
         guard let index = state.entries.firstIndex(where: { $0.ref == wanted.ref }) else { throw UIError.stale }
-        let occurrence = state.entries[..<index].filter { $0.caption == wanted.caption }.count
+        let fromEnd = state.anchoredAtEnd
+        let occurrence = (fromEnd ? state.entries[(index + 1)...] : state.entries[..<index])
+            .filter { $0.caption == wanted.caption }.count
         state.cursor = nil
         var seen = 0
-        var item = try walker.first()
+        var item = try fromEnd ? walker.end() : walker.first()
         for _ in 0..<(state.entries.count + Self.page) {
             guard let current = item, current.pid == state.pid else { throw UIError.stale }
             if current.hex == wanted.token || current.caption == wanted.caption {
@@ -228,7 +234,7 @@ final class UIScreen {
                 }
                 seen += 1
             }
-            item = try walker.move(.next)
+            item = try walker.move(fromEnd ? .previous : .next)
         }
         throw UIError.stale
     }
@@ -239,7 +245,9 @@ final class UIScreen {
             return refresh(index, with: item)
         }
 
-        if let cursor = state.cursor, abs(target - cursor) <= target + 1 {
+        // Steps from where walks start: the first element, or the last one for a list taken from the end.
+        let fromAnchor = state.anchoredAtEnd ? state.entries.count - 1 - target : target
+        if let cursor = state.cursor, abs(target - cursor) <= fromAnchor + 1 {
             state.cursor = nil
             if let item = try walkFromCursor(cursor, to: target, matches: matches) {
                 state.cursor = target
@@ -248,6 +256,20 @@ final class UIScreen {
         }
 
         state.cursor = nil
+        if state.anchoredAtEnd {
+            let end = state.entries.count - 1
+            var last = try walker.end()
+            guard matches(last, end) else { throw UIError.stale }
+            if target < end {
+                for index in stride(from: end - 1, through: target, by: -1) {
+                    last = try walker.move(.previous)
+                    guard matches(last, index) else { throw UIError.stale }
+                }
+                last = try overshoot(target, forward: false, matches: matches) ?? last
+            }
+            state.cursor = target
+            return last!
+        }
         var last = try walker.first()
         guard matches(last, 0) else { throw UIError.stale }
         if target > 0 {
@@ -425,6 +447,12 @@ final class UIScreen {
         (position / page + 1) * page
     }
 
+    /// How far to re-sweep after acting on `position`: its batch, counted from the end for a list taken
+    /// from the end.
+    func batchLimit(_ position: Int) -> Int {
+        Self.batchEnd(state.anchoredAtEnd ? state.entries.count - 1 - position : position)
+    }
+
     // MARK: - Taking and comparing the list
 
     enum Report {
@@ -438,11 +466,29 @@ final class UIScreen {
     ///
     /// Same app and more than half the elements overlap means same screen — keep the refs and report only
     /// what changed. Otherwise it's a new screen and refs restart at 1.
-    func observe(limit: Int) throws -> Report {
+    ///
+    /// `fromEnd` sweeps backward from the last element instead (`ui --last`); nil keeps the current list's
+    /// direction. If "move to last" doesn't work on the screen, it sweeps from the start as usual.
+    func observe(limit: Int, fromEnd wanted: Bool? = nil) throws -> Report {
         state.cursor = nil
+        if wanted ?? state.anchoredAtEnd, let swept = try walker.walkFromLast(limit: limit) {
+            let report = compare(swept.items, complete: swept.complete, focus: swept.focus, fromEnd: true)
+            // Taking the list from the end was for that screen (a chat). If an action led elsewhere (back
+            // to the chat list), list the new screen from the start as usual.
+            guard wanted == nil, case .newScreen = report else { return report }
+            state.entries = []
+            state.cursor = nil
+        }
         let (items, wrapped) = try walker.walkFromFirst(limit: limit)
+        return compare(items, complete: wrapped, focus: wrapped ? 0 : items.count - 1, fromEnd: false)
+    }
+
+    /// Diffs a fresh sweep against the stored list. `focus` is the index in `items` where focus was left.
+    private func compare(_ items: [AXWalker.Item], complete: Bool, focus: Int?, fromEnd: Bool) -> Report {
         let pid = items[0].pid
         let old = state.entries
+        // Where an element sits, counted from the side the sweep started on.
+        func place(_ index: Int, among count: Int) -> Int { fromEnd ? count - 1 - index : index }
         // Which old entry is this element? Same token means same element. Tokens can change (see
         // `refresh`), so if not found, pick an unmatched entry with the same description, nearest first.
         var matchedOld = Set<Int>()
@@ -455,7 +501,10 @@ final class UIScreen {
         }
         for (position, item) in items.enumerated() where pairs[position] == nil {
             let candidates = old.indices.filter { !matchedOld.contains($0) && old[$0].caption == item.caption }
-            if let index = candidates.min(by: { abs($0 - position) < abs($1 - position) }) {
+            let wanted = place(position, among: items.count)
+            if let index = candidates.min(by: {
+                abs(place($0, among: old.count) - wanted) < abs(place($1, among: old.count) - wanted)
+            }) {
                 matchedOld.insert(index)
                 pairs[position] = index
             }
@@ -463,8 +512,8 @@ final class UIScreen {
 
         let overlap = pairs.compactMap { $0 }.count
         let comparable = min(items.count, old.count)
-        guard pid == state.pid, comparable > 0, overlap * 2 >= comparable else {
-            reset(items, wrapped: wrapped, pid: pid)
+        guard pid == state.pid, fromEnd == state.anchoredAtEnd, comparable > 0, overlap * 2 >= comparable else {
+            reset(items, complete: complete, focus: focus, fromEnd: fromEnd, pid: pid)
             return .newScreen
         }
 
@@ -472,6 +521,9 @@ final class UIScreen {
         var changed: [(ref: Int, before: String, after: String)] = []
         var added: [UIState.Entry] = []
         var unchanged = 0
+        // From the end, elements before the earliest one seen again are older ones that slid into the
+        // window (a sent message pushes the window back), not new. Only a list swept to the start knows.
+        let slidIn = fromEnd && !state.done ? pairs.firstIndex { $0 != nil } ?? 0 : 0
         for (position, item) in items.enumerated() {
             if let index = pairs[position] {
                 let known = old[index]
@@ -484,25 +536,37 @@ final class UIScreen {
             } else {
                 let entry = UIState.Entry(ref: state.nextRef, item: item)
                 state.nextRef += 1
-                added.append(entry)
+                if position >= slidIn { added.append(entry) }
                 fresh.append(entry)
             }
         }
-        // Only what disappeared within the range swept this time counts as removed. The part after it
-        // (not swept) is kept as is.
+        // Only what disappeared within the range swept this time counts as removed. The part beyond it
+        // (not swept) is kept as is. From the end, that's everything before the earliest element seen again:
+        // a new message pushes the oldest one out of the swept window without removing it.
         var removed: [UIState.Entry] = []
+        var head: [UIState.Entry] = []
         var tail: [UIState.Entry] = []
+        let earliestSeen = matchedOld.min() ?? 0
         for (index, entry) in old.enumerated() where !matchedOld.contains(index) {
-            if wrapped || index < items.count { removed.append(entry) } else { tail.append(entry) }
+            if complete || (fromEnd ? index > earliestSeen : index < items.count) {
+                removed.append(entry)
+            } else if fromEnd {
+                head.append(entry)
+            } else {
+                tail.append(entry)
+            }
         }
-        state.entries = fresh + tail
-        state.cursor = items.count - 1
-        state.done = wrapped
-        state.shown = min(max(state.shown, items.count), state.entries.count)
+        state.entries = head + fresh + tail
+        state.cursor = focus.map { head.count + $0 }
+        state.done = complete
+        // From the end, `shown` counts back from the last element, so what arrived at the end (a sent
+        // message) or left it shifts it. Otherwise --more repeated an element.
+        let shown = fromEnd ? state.shown + added.count - removed.count : state.shown
+        state.shown = min(max(shown, items.count), state.entries.count)
         return .sameScreen(changed: changed, added: added, removed: removed, unchanged: unchanged)
     }
 
-    private func reset(_ items: [AXWalker.Item], wrapped: Bool, pid: Int) {
+    private func reset(_ items: [AXWalker.Item], complete: Bool, focus: Int?, fromEnd: Bool, pid: Int) {
         let app = pid == state.pid ? state.app : appName(pid: pid)
         state = UIState(udid: udid)
         state.pid = pid
@@ -511,8 +575,9 @@ final class UIScreen {
             .init(ref: $0.offset + 1, item: $0.element)
         }
         state.nextRef = items.count + 1
-        state.cursor = items.count - 1
-        state.done = wrapped
+        state.cursor = focus
+        state.done = complete
+        state.fromEnd = fromEnd ? true : nil
         state.shown = min(Self.page, items.count)
     }
 
@@ -526,6 +591,7 @@ final class UIScreen {
     /// the last element.
     func more() throws -> ArraySlice<UIState.Entry> {
         guard !state.entries.isEmpty else { throw UIError.noList }
+        if state.anchoredAtEnd { return try moreEarlier() }
         let start = state.shown
         if state.entries.count < start + Self.page, !state.done {
             try go(to: state.entries.count - 1)
@@ -540,6 +606,7 @@ final class UIScreen {
                 if let index = known[item.hex] ?? (item.caption == state.entries[0].caption ? 0 : nil) {
                     state.done = true
                     state.cursor = index
+                    if index == 0, state.entries.count > 1 { try walker.returnToStartPage() }
                     break
                 }
                 guard item.pid == state.pid else { throw UIError.stale }
@@ -555,6 +622,40 @@ final class UIScreen {
         return state.entries[start..<end]
     }
 
+    /// `more` for a list taken from the end: walks on backward from the earliest element and puts what it
+    /// finds in front. The returned batch is in focus order, like every page.
+    private func moreEarlier() throws -> ArraySlice<UIState.Entry> {
+        let start = state.shown
+        if state.entries.count < start + Self.page, !state.done {
+            try go(to: 0)
+            var known = Set(state.entries.map(\.token))
+            while state.entries.count < start + Self.page {
+                state.cursor = nil
+                // `previous` from the first element sends no event (PITFALLS #38).
+                guard let item = try walker.move(.previous) else {
+                    state.done = true
+                    state.cursor = 0
+                    break
+                }
+                // Wrapped around to the end.
+                if known.contains(item.hex) || item.caption == state.entries.last?.caption {
+                    state.done = true
+                    state.cursor = state.entries.lastIndex { $0.token == item.hex } ?? state.entries.count - 1
+                    break
+                }
+                guard item.pid == state.pid else { throw UIError.stale }
+                state.entries.insert(UIState.Entry(ref: state.nextRef, item: item), at: 0)
+                state.nextRef += 1
+                known.insert(item.hex)
+                state.cursor = 0
+            }
+        }
+        let end = min(start + Self.page, state.entries.count)
+        state.shown = end
+        let count = state.entries.count
+        return state.entries[(count - end)..<(count - start)]
+    }
+
     /// Elements whose description contains `text`. Searches the already-swept list first; if nothing, sweeps
     /// on to the end (at most `findLimit`). Since it only walks as far as needed, it often doesn't go to the end.
     static let findLimit = 300
@@ -567,8 +668,8 @@ final class UIScreen {
         // the last element with a check at every step, and on screens whose rows change even while walking
         // (ad rows in a messenger's chat list, etc.) that check failed and stopped with "screen changed".
         // One full sweep only costs the 1–2 seconds of re-walking the first 20.
-        if hits().isEmpty, !state.done {
-            _ = try observe(limit: Self.findLimit)
+        if hits().isEmpty, !state.done || state.anchoredAtEnd {
+            _ = try observe(limit: Self.findLimit, fromEnd: false)
             state.shown = state.entries.count
         }
         return hits()
@@ -593,11 +694,18 @@ final class UIScreen {
 
     func printPage(_ slice: ArraySlice<UIState.Entry>) {
         for entry in slice { print("@e\(entry.ref)\t\(Self.caption(entry))") }
-        if state.shown < state.entries.count || !state.done {
+        if state.anchoredAtEnd, state.shown < state.entries.count || !state.done {
+            print("(earlier elements — ui --more)")
+        } else if state.shown < state.entries.count || !state.done {
             print("(more — ui --more)")
         } else {
             print("(end)")
         }
+    }
+
+    /// The first page shown: the start of the list, or its end for a list taken from the end.
+    var firstPage: ArraySlice<UIState.Entry> {
+        state.anchoredAtEnd ? state.entries.suffix(Self.page) : state.entries.prefix(Self.page)
     }
 
     var header: String {
@@ -609,7 +717,7 @@ final class UIScreen {
         switch report {
         case .newScreen:
             print("New screen — \(header)")
-            printPage(state.entries.prefix(Self.page))
+            printPage(firstPage)
         case .sameScreen(let changed, let added, let removed, let unchanged):
             if changed.isEmpty, added.isEmpty, removed.isEmpty {
                 print("Same screen — nothing changed (\(unchanged) unchanged). If nothing reacted, pick a different element.")

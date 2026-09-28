@@ -20,6 +20,9 @@ struct UICommand: ParsableCommand {
     @Flag(name: .long, help: "Continue with the next 20.")
     var more = false
 
+    @Flag(name: .long, help: "Start from the last element and sweep backward, for screens that sit at their end, like a chat: lists the newest messages and the input field without scrolling to the top. --more then continues with earlier elements.")
+    var last = false
+
     @Option(name: .long, help: "Keep sweeping until an element whose description contains this text appears, and print only the matches.")
     var find: String?
 
@@ -29,8 +32,8 @@ struct UICommand: ParsableCommand {
                 // Finding elements at the end of the list, like the bottom search bar (iOS 26+) or a close
                 // button, used to take several --more calls; this makes it one. If a swept list exists,
                 // search it first.
-                if screen.state.entries.isEmpty || !more {
-                    _ = try screen.observe(limit: UIScreen.page)
+                if screen.state.entries.isEmpty || !more || screen.state.anchoredAtEnd {
+                    _ = try screen.observe(limit: UIScreen.page, fromEnd: false)
                     screen.state.shown = min(UIScreen.page, screen.state.entries.count)
                 }
                 let hits = try screen.find(find)
@@ -51,10 +54,13 @@ struct UICommand: ParsableCommand {
                 }
                 return
             }
-            _ = try screen.observe(limit: UIScreen.page)
+            _ = try screen.observe(limit: UIScreen.page, fromEnd: last)
             screen.state.shown = min(UIScreen.page, screen.state.entries.count)
             print(screen.header)
-            screen.printPage(screen.state.entries.prefix(UIScreen.page))
+            if last, !screen.state.anchoredAtEnd {
+                print("(this screen can't be swept from the end — listed from the start)")
+            }
+            screen.printPage(screen.firstPage)
         }
     }
 }
@@ -102,6 +108,9 @@ struct PressCommand: ParsableCommand {
     @Flag(name: .long, help: "Don't take the list again after pressing.")
     var noUi = false
 
+    @Flag(name: .long, help: "Take the list after pressing from the end, like ui --last (for opening a chat).")
+    var last = false
+
     func run() throws {
         let ref = try parseRef(ref)
         try UIScreen.with(udid: device.udid) { screen in
@@ -116,7 +125,7 @@ struct PressCommand: ParsableCommand {
                 print("Pressed @e\(ref) \(UIScreen.caption(entry))")
                 if noUi { return }
                 try screen.settle()
-                screen.printReport(try screen.observe(limit: UIScreen.batchEnd(position)))
+                screen.printReport(try screen.observe(limit: screen.batchLimit(position)))
                 return
             }
             let item = try screen.go(to: position)
@@ -164,7 +173,8 @@ struct PressCommand: ParsableCommand {
             }
             if noUi { return }
             try screen.settle()
-            screen.printReport(try screen.observe(limit: UIScreen.batchEnd(position)))
+            let limit = screen.batchLimit(position)
+            screen.printReport(try screen.observe(limit: limit, fromEnd: last ? true : nil))
         }
     }
 
@@ -315,7 +325,7 @@ struct TypeCommand: ParsableCommand {
             if noUi { return }
             try screen.settle()
             screen.printReport(
-                try screen.observe(limit: position.map(UIScreen.batchEnd) ?? UIScreen.page))
+                try screen.observe(limit: position.map(screen.batchLimit) ?? UIScreen.page))
         }
     }
 

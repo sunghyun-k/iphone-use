@@ -73,6 +73,7 @@ iphone-use ui                 # first 20
 # (more — ui --more)
 iphone-use ui --more          # next 20 (@e21 onward)
 iphone-use ui --find "Search"  # only elements whose description contains this; keeps sweeping to the end
+iphone-use ui --last          # the last 20 instead: a chat's newest messages and its input field
 iphone-use press @e12         # press → reports the resulting screen
 iphone-use type @e36 "Battery" # tap the field and type
 iphone-use back               # previous screen
@@ -104,6 +105,13 @@ iphone-use back               # previous screen
   - **On iOS 26+ the Settings search field sits at the very bottom of the screen**, so it shows up at
     the end of the list, around item 40. It isn't missing just because it's not in the first 20. Find
     it with `ui --find "Search Field"` (Korean devices: `ui --find "검색 필드"`).
+- **Chats: use `--last`.** A chat opens scrolled to its newest message, but the list runs from the
+  top, so plain `ui` scrolls the chat up to its oldest messages and lists those first. `ui --last`
+  lists the last 20 elements (newest messages, then the input field and send button) and leaves the
+  chat at the bottom; open a chat with `press @eN --last` to get that list right away. After `--last`,
+  `ui --more` goes on to **earlier** messages (`(earlier elements — ui --more)`), and `press`/`type`
+  on that screen keep reading from the end, so a sent message shows up as `added`. Plain `ui` goes
+  back to listing from the top. Keyboard keys are left out of a `--last` list.
 - **Always run `ui` before your first action.** This is the user's personal device. They may have just
   been in another app, such as Messages. If it isn't the app or screen you expected, stop and ask the
   user.
@@ -154,8 +162,10 @@ removed	@e2	Battery, Button, Static Text
 
 ```
 iphone-use ui [--more]                            # element list, 20 at a time (@eN<TAB>description)
+iphone-use ui --last                              # the last 20 (chats: newest messages); --more goes earlier
 iphone-use ui --find "text"                       # only elements containing the text (sweeps to the end)
 iphone-use press @eN [--hold 0.8] [--no-ui]       # press; --hold 0.6 or more is a long press
+iphone-use press @eN --last                       # press, then list the result from the end (opening a chat)
 iphone-use press @eN --action "More Info"         # the row's ⓘ button (see "Row-end buttons")
 iphone-use press @eN --trailing                   # press the right-end area of the element
 iphone-use press @eN --swipe left|right           # short swipe on a row to reveal hidden buttons (Delete etc.)

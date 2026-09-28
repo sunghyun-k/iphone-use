@@ -106,12 +106,115 @@ final class AXWalker {
             // Wrapped around. The first element can come back with a new token after being scrolled off
             // screen, so check the description too.
             if seen.contains(item.token) || (items.count > 2 && item.caption == head.caption) {
+                if items.count > 1 { try returnToStartPage() }
                 return (items, true)
             }
             seen.insert(item.token)
             items.append(item)
         }
         return (items, false)
+    }
+
+    /// Goes to the last element. Same trick as `first` when focus is already there.
+    func last() throws -> Item? {
+        if let item = try move(.last) { return item }
+        _ = try move(.previous)
+        return try move(.last)
+    }
+
+    /// Sweeps `limit` elements **backward** from the last one, for screens that sit scrolled to the end
+    /// (a chat). Walking from the first element scrolled the chat up to its oldest loaded message
+    /// (PITFALLS #41). `items` is in focus order (earliest first); `complete` is true when it reached the
+    /// first element; `focus` is the index in `items` where focus was left (nil: on a keyboard key).
+    ///
+    /// nil when "move to last" doesn't work on this screen: in Settings it lands on the first element
+    /// (PITFALLS #37), and `previous` from the first element sends no event, so a first step without an
+    /// event means we're not at the end.
+    func walkFromLast(limit: Int) throws -> (items: [Item], complete: Bool, focus: Int?)? {
+        guard let tail = try last() else { return nil }
+        var met = [tail]
+        var seen: Set<Data> = [tail.token]
+        var trait = Self.keyTrait(of: tail)
+        // How many of `met` (counted from the end) are the on-screen keyboard. Those aren't listed.
+        func keys() -> Int {
+            guard let trait else { return 0 }
+            return met.firstIndex { !Self.inKeyboard($0, trait: trait) } ?? met.count
+        }
+        var complete = false
+        var wrapped = false
+        while met.count - keys() < limit {
+            guard let item = try move(.previous) else {
+                if met.count == 1 { return nil }
+                complete = true
+                break
+            }
+            if seen.contains(item.token) || (met.count > 2 && item.caption == tail.caption) {
+                (complete, wrapped) = (true, true)
+                break
+            }
+            seen.insert(item.token)
+            met.append(item)
+            if trait == nil, met.count <= 10 { trait = Self.keyTrait(of: item) }
+        }
+        let skipped = keys()
+        let items = Array(met[skipped...].reversed())
+        guard !items.isEmpty else { return nil }
+        // Wrapping around puts focus back on the last element, a key when the keyboard is up.
+        if wrapped { return (items, complete, skipped > 0 ? nil : items.count - 1) }
+        // Focus on the earliest swept element scrolled the chat up by the whole window — with the keyboard
+        // up, a just-sent message ended up off screen. Walk back down so the view is at the end again.
+        var focus = 0
+        while focus < items.count - 1, try move(.next) != nil { focus += 1 }
+        return (items, complete, focus)
+    }
+
+    /// Goes to the last element that isn't an on-screen keyboard key.
+    func end() throws -> Item? {
+        guard let tail = try last() else { return nil }
+        var item = tail
+        var trait = Self.keyTrait(of: tail)
+        var steps = 0
+        while trait == nil, steps < 10 {
+            guard let previous = try move(.previous) else { break }
+            item = previous
+            steps += 1
+            trait = Self.keyTrait(of: item)
+        }
+        // No keyboard: back to the last element in one step.
+        guard let trait else { return steps == 0 ? tail : try last() }
+        while Self.inKeyboard(item, trait: trait) {
+            guard let previous = try move(.previous) else { return nil }
+            item = previous
+        }
+        return item
+    }
+
+    /// Identifiers UIKit gives some keyboard keys in every language (the letter keys have none).
+    static let keyIdentifiers: Set<String> = ["Return", "space", "delete"]
+
+    /// The localized trait text keyboard keys carry ("…, Keyboard Key"), read off a key UIKit identifies.
+    /// The keys come last in focus order (PITFALLS #38), so with the keyboard up a sweep from the end found
+    /// nothing but keys; there is no language-independent trait value to filter them by (PITFALLS #41).
+    static func keyTrait(of item: Item) -> String? {
+        guard let identifier = item.identifier, keyIdentifiers.contains(identifier) else { return nil }
+        return item.caption.components(separatedBy: ", ").last
+    }
+
+    /// A key, or an unnamed element between keys (the keyboard has one before Return).
+    static func inKeyboard(_ item: Item, trait: String) -> Bool {
+        item.caption.isEmpty || item.caption.components(separatedBy: ", ").contains(trait)
+    }
+
+    /// After a sweep wraps around, steps onto the second element and back so the view shows the page the
+    /// sweep started on. Focus ends on the first element.
+    ///
+    /// In a horizontally paged app (Weather's cities), `next` past the last element of a page moves on to
+    /// the next page's first element and the pager scrolls there. Wrapping back to the first element doesn't
+    /// scroll it back — that element is the page indicator in the bottom bar, outside the pager — so each
+    /// `ui --find` left the app one page further along (PITFALLS #39).
+    func returnToStartPage() throws {
+        guard try move(.next) != nil else { return }
+        _ = try move(.previous)
     }
 
     // MARK: - Measuring
@@ -165,10 +268,13 @@ final class AXWalker {
     /// Don't use all changed pixels. Things that change on their own in the meantime — clock, video,
     /// waveforms — get mixed in. The box has a green border, so on any background (green - average of red
     /// and blue) goes up.
+    ///
+    /// Over a translucent bar the box is faint and its border only 1–2 px thick, so if the half-size pass
+    /// finds nothing, look again at full size with a lower threshold (PITFALLS #40).
     static func greenBox(shown: CGImage, hidden: CGImage) -> CGRect? {
-        region(shown, hidden, minimum: 100) { a, i in
-            Int(a[i + 1]) - (Int(a[i]) + Int(a[i + 2])) / 2
-        }
+        let green = { (a: [UInt8], i: Int) in Int(a[i + 1]) - (Int(a[i]) + Int(a[i + 2])) / 2 }
+        return region(shown, hidden, minimum: 100, score: green)
+            ?? region(shown, hidden, minimum: 100, scale: 1, threshold: 25, score: green)
     }
 
     /// Rect of the yellow preview box: the largest blob among pixels that got **more yellow** in the after frame.
@@ -181,15 +287,16 @@ final class AXWalker {
         }
     }
 
-    /// Bounding rect of the largest blob among pixels where `score(with)` - `score(without)` exceeds 40.
+    /// Bounding rect of the largest blob among pixels where `score(with)` - `score(without)` exceeds
+    /// `threshold`.
     private static func region(
-        _ with: CGImage, _ without: CGImage, minimum: Int, score: ([UInt8], Int) -> Int
+        _ with: CGImage, _ without: CGImage, minimum: Int, scale: Int = 2, threshold: Int = 40,
+        score: ([UInt8], Int) -> Int
     ) -> CGRect? {
         guard with.width == without.width, with.height == without.height else { return nil }
-        // Work at half size. At full size it's 3.6M pixels and took over 0.5 s per pass in a debug build.
-        // The box border is a few pixels thick so it stays connected at half size. The rect comes back
-        // within 2 pixels.
-        let scale = 2
+        // Work at half size by default. At full size it's 3.6M pixels and took over 0.5 s per pass in a
+        // debug build. The box border is usually a few pixels thick so it stays connected at half size. The
+        // rect comes back within 2 pixels.
         let a = rgba(with, scale: scale)
         let b = rgba(without, scale: scale)
         let width = with.width / scale
@@ -199,7 +306,7 @@ final class AXWalker {
         for y in Int(Double(height) * 0.04)..<height {
             for x in 0..<width {
                 let i = (y * width + x) * 4
-                if score(a, i) - score(b, i) > 40 { mask[y * width + x] = true }
+                if score(a, i) - score(b, i) > threshold { mask[y * width + x] = true }
             }
         }
         guard let rect = largestRegion(mask, width: width, height: height, minimum: minimum / (scale * scale))

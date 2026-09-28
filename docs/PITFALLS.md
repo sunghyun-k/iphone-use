@@ -556,6 +556,65 @@ position left on the device to the target, then measures the rect with the green
   Each request drains queued events and clears the audit target pid. Unless the error is one where we
   chose to stop (`KeepsSession`), the session is released.
 
+### 39. Walking past the end of a page turns a horizontal pager
+
+In Weather (one page per city, iOS 27.2), focus order runs through the pages in sequence: the page
+indicator in the bottom bar, the visible page's content, then **the next page's content**. When `next`
+crosses from the last element of one page to the first of the next, the pager scrolls to that page,
+just as VoiceOver does. No event marks the crossing: nothing arrives besides
+`hostInspectorCurrentElementChanged:`, and the tokens and descriptions don't tell pages apart.
+
+- Every `ui --find` swept to the end, and the wrap back to the first element didn't scroll the
+  pager back, because that element (the page indicator) sits outside the pager. Each sweep left the
+  app one page further on, and a few sweeps ended on the last city. Now, when a sweep wraps
+  (`walkFromFirst`, `ui --more` reaching the end), focus steps onto the second element and back. That
+  element is the start page's first content, and stepping onto it scrolls the pager back.
+- Jumping focus (`deviceInspectorFocusOnElement:`) to a start-page element, then stepping from it,
+  did **not** turn the pager back. Only crossing a page boundary with `next`/`previous` does. A sweep
+  that stops at `findLimit` without wrapping can still leave the app on another page; walking back
+  would cost as many steps as the sweep took.
+- The list is still in focus order, so it includes later pages. `ui` right after swiping to page 2
+  sometimes listed page 1 first, and the sweep brought page 1 back.
+
+### 40. Over a translucent bar the green box is too faint at half size
+
+In a messenger app's chat screen (iOS 27.2), `type` into the message field and `press` on its send
+button both stopped with "could not measure the element". The field and button sit in the translucent
+bottom bar. The green box was drawn, but its border there is only 1–2 px thick and raises the green score
+by about 45, and much less over the button's yellow fill. Halving the frame averages the border with its
+neighbors down to about 22, under the threshold of 40, so nothing was found. The yellow preview box
+didn't help either: the bar washes it out, and on the yellow button it doesn't stand out.
+
+At full size and a threshold of 25, the field measured 704x98 and the send button 98x98, with the
+blinking text cursor left out. `greenBox` now runs that pass when the half-size pass finds nothing, so
+the extra full-size cost is paid only on screens like this.
+
+### 41. Sweeping from the first element scrolls a chat to its oldest messages
+
+A messenger app's chat screen (iOS 27.2) opens scrolled to the newest message, but `ui` (and the list
+printed after `press`) starts with "move to first", so focus went to the header and then the oldest
+loaded message, and the chat scrolled all the way up. The first 20 were the oldest messages; the newest
+ones and the input field needed `--more`. In a long chat this may also make the app load older history.
+
+- **"Move to last" works on such screens.** In that chat it went to the last bottom-bar button, and
+  `previous` steps went input field → newest message → older, without the chat moving. It still lands on
+  the first element in Settings › General (#37), so `walkFromLast` treats a first `previous` with no
+  event (nothing before the first element, #38) as "last didn't work" and the caller falls back to a
+  sweep from the start.
+- **With the keyboard up, the end of the focus order is the keyboard.** About 40 keys, then the
+  suggestion bar, then the app's own elements, so a sweep of the last 20 got only keys. Keys have the
+  app's pid and no numeric traits (#38). Return, space and delete do carry language-independent
+  identifiers (`Return`, `space`, `delete`), so the localized trait text is read off one of them (the
+  last part of its description, "키보드 키" / Keyboard Key) and the leading run of elements carrying it,
+  plus unnamed ones between keys, is skipped. Walks from the end (`end()`) skip it the same way.
+- **Stepping back 20 elements scrolls the chat up by 20 elements.** With the keyboard up, a message
+  that had just been sent ended up off screen. After the sweep, focus walks forward to the last swept
+  element so the chat is back at the bottom (about 1 s).
+- In a list taken from the end, `--more` walks backward from its earliest element and puts what it
+  finds in front, and after an action the older messages that slide into the window aren't reported as
+  `added`. A list from the end applies to that screen: when an action leads to a different screen, the
+  new one is listed from the start as usual.
+
 ## Permissions
 
 DeviceHub.app has **empty** entitlements. All trust is handled by the pairing record and the
