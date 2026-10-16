@@ -49,8 +49,24 @@ struct UIState: Codable {
     /// continues toward earlier elements, and walks start from the last element. nil in old list files.
     var fromEnd: Bool?
     var nextRef = 1
+    /// Leading element names of the screens we came through in this app, most recent last. A system
+    /// back button is named after the previous screen's title, which no trait or identifier gives
+    /// away in every language, so `back` looks for one of these names (PITFALLS #45). nil in old list files.
+    var trail: [[String]]?
 
     init(udid: String) { self.udid = udid }
+
+    /// How many leading elements stand for a screen in `trail`. The navigation bar comes first.
+    static let leadCount = 4
+
+    /// The name part of a description ("Back, Button" → "Back").
+    static func name(of caption: String) -> String {
+        caption.components(separatedBy: ", ").first?.trimmingCharacters(in: .whitespaces) ?? ""
+    }
+
+    static func leadNames(_ captions: some Sequence<String>) -> [String] {
+        Array(captions.lazy.map(name(of:)).filter { !$0.isEmpty }.prefix(leadCount))
+    }
 
     var isHome: Bool { app == "SpringBoard" }
     var anchoredAtEnd: Bool { fromEnd == true }
@@ -590,7 +606,9 @@ final class UIScreen {
 
     private func reset(_ items: [AXWalker.Item], complete: Bool, focus: Int?, fromEnd: Bool, pid: Int) {
         let app = pid == state.pid ? state.app : appName(pid: pid)
+        let trail = Self.trail(leaving: state, arriving: items, fromEnd: fromEnd, pid: pid)
         state = UIState(udid: udid)
+        state.trail = trail.isEmpty ? nil : trail
         state.pid = pid
         state.app = app
         state.entries = items.enumerated().map {
@@ -601,6 +619,33 @@ final class UIScreen {
         state.done = complete
         state.fromEnd = fromEnd ? true : nil
         state.shown = min(Self.page, items.count)
+    }
+
+    /// Coming back to the screen on top of the trail pops it; moving on within the app pushes the screen
+    /// being left. Lists taken from the end (chats) start with messages, not the navigation bar, so
+    /// they are neither pushed nor compared.
+    private static func trail(leaving old: UIState, arriving items: [AXWalker.Item], fromEnd: Bool, pid: Int)
+        -> [[String]]
+    {
+        guard pid == old.pid else { return [] }
+        var trail = old.trail ?? []
+        let arriving = UIState.leadNames(items.map(\.caption))
+        // One shared name isn't enough: a back button carries the previous screen's title.
+        func alike(_ a: [String], _ b: [String]) -> Bool {
+            if !a.isEmpty, a == b { return true }
+            let shared = Set(a).intersection(b).count
+            return shared >= 2 && shared * 2 >= min(a.count, b.count)
+        }
+        // Same navigation bar, other content (a long scroll): still the same screen.
+        if !fromEnd, !old.anchoredAtEnd, alike(UIState.leadNames(old.entries.map(\.caption)), arriving) {
+            return trail
+        }
+        if !fromEnd, let top = trail.last, alike(top, arriving) {
+            trail.removeLast()
+        } else if !old.anchoredAtEnd, !old.entries.isEmpty {
+            trail.append(UIState.leadNames(old.entries.map(\.caption)))
+        }
+        return Array(trail.suffix(8))
     }
 
     /// Executable name for a pid. Empty string without a tunnel (iOS 16 and earlier).

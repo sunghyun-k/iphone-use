@@ -650,7 +650,7 @@ screen changed (an unread badge), so `back` even reported "Back (edge swipe)".
   on something that reacts to it. `back` no longer swipes. After the `BackButton` identifier it looks
   for a button **labeled** as back among the first elements (the messenger's chat screen says "Previous,
   Button" in the device's language); apps that don't use the system back button still label theirs. Only the whole name counts
-  ("Previous month" doesn't). If neither is found, it reports the top-left element and presses nothing.
+  ("Previous month" doesn't). If neither is found, it presses nothing (see #45 for what came after).
 
 ### 44. Our own RSD handshake cut Xcode off from the device
 
@@ -682,6 +682,20 @@ code (tunnel assertion, `nettop` port lookup, handshake) is gone. Details found 
   established", or no reply). Over USB, accessibility and `installation_proxy` are started with
   MobileDevice instead, which leaves `remoted` alone. The service connection outlives the lockdown
   session, but invalidating it silences the DTX session, so it is held until the socket closes.
+
+### 45. The top-left guess named the title, and some back buttons have only the previous title
+
+When `back` found neither an identifier nor a "Back" label, it reported the top-left element as the
+likely back button. On a SwiftUI detail screen that was the navigation title ("Details, Header"), not
+the back button next to it ("Probe, Button"); an agent following the hint would press the title.
+
+A toolbar back button an app draws itself (`navigationBarBackButtonHidden` + a leading button) has no
+identifier and is named after the previous screen, like the system one. Its name says nothing in any
+language, but we saw the previous screen: `UIState.trail` keeps the first four names of each screen
+we left within the app, pops when the screen comes back, and `back` presses a leading element whose
+name is among the top entry's. Two screens count as the same only if they share two names (or are
+identical): a back button shares exactly one name, the previous title, with the screen it returns to.
+The top-left guess is gone; with nothing found, `back` prints the list and presses nothing.
 
 ## Permissions
 

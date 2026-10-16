@@ -234,16 +234,17 @@ iphone-use paste "🙂" [--file f] / clipboard [-o backup.txt]
 `back` tries these in order and says which one it used.
 
 1. Press a leading element whose **identifier marks it as a back or close button** (`BackButton` and
-   the like). A system back button's name is usually the previous screen's title ("Settings"), not
-   "Back", so its name alone can't find it.
-2. Otherwise, press a leading element **named** as a back button ("Back", "Previous" or a translation). Apps with
+   the like).
+2. Otherwise, press a leading element **named after the previous screen**. A system back button is
+   named after the previous screen's title ("Settings"), not "Back". `back` knows the previous screen
+   only if you got here with `press`, `type` or another command that prints the result list.
+3. Otherwise, press a leading element **named** as a back button ("Back", "Previous" or a translation). Apps with
    their own back button usually name it that way.
-3. Otherwise it **doesn't press anything**. It says "Could not go back" and shows the top-left element.
-   It never swipes.
-   - If that element is a back button (a `<` shape, named "Back" or the previous title), `press` it.
+4. Otherwise it **doesn't press anything**. It says "Could not go back" and prints the list. It never
+   swipes and never guesses.
+   - If one of the first elements is a back button (named "Back" or the previous screen's title), `press` it.
    - For sheets and popups, find Close, Cancel or Done with `ui --find Close` and press it.
-   - The top-left element can also be something that isn't back, such as a side menu or a profile
-     button. Read the description before pressing.
+   - The first elements can also be a side menu or a profile button. Read the description before pressing.
 - **A screen in search mode** (e.g. Settings' first screen showing search results) doesn't leave with
   `back`. Press the `Close` (or `Cancel`) button next to the search field. On iOS 26+ it's in the
   bottom search bar, so it's at the end of the list: `ui --find Close` → `press`. `key esc` only

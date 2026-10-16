@@ -359,10 +359,11 @@ struct BackCommand: ParsableCommand {
         abstract: "Go to the previous screen by pressing its back button, and report the new screen.",
         discussion: """
             1. If one of the first elements has a back/close button identifier (BackButton etc.), press it.
-            2. Otherwise, if one of them is labeled as a back button ("Back", "Previous" or a translation), press it.
-            3. Otherwise don't press anything; report the element at the top-left of the screen — press it if
-               it's the back button. For sheets/modals, find a Close/Cancel button in the ui list and press it.
-            It never swipes. Refuses on the home screen.
+            2. Otherwise, if one of them is named after the previous screen (how system back buttons are
+               named), press it. Only works when you came here with press/type/launch.
+            3. Otherwise, if one of them is labeled as a back button ("Back", "Previous" or a translation), press it.
+            4. Otherwise don't press anything and print the list. For sheets/modals, press a Close/Cancel button.
+            It never swipes and never guesses. Refuses on the home screen.
             """
     )
 
@@ -383,7 +384,11 @@ struct BackCommand: ParsableCommand {
             // apart — the navigation bar's back button keeps its token across screens and only its name
             // changed ("Settings" → "Back").
             if let first = screen.state.entries.first, first.caption != head.caption {
-                screen.state = UIState(udid: screen.state.udid)
+                let old = screen.state
+                screen.state = UIState(udid: old.udid)
+                screen.state.pid = old.pid
+                screen.state.app = old.app
+                screen.state.trail = old.trail
             }
 
             var items = [head]
@@ -394,12 +399,17 @@ struct BackCommand: ParsableCommand {
             // 1. Identifier. A system back button's name is the previous screen's title ("Settings"), so
             //    names can't pick it, but UIKit's identifier is `BackButton` in every language and custom
             //    buttons usually have an English identifier too.
-            // 2. Label. Custom back buttons without an identifier still say what they are (a messenger's
+            // 2. Previous screen's name. SwiftUI's back button (iOS 27) has no identifier and is named after
+            //    the previous screen's title ("Settings"), so only knowing where we came from finds it
+            //    (`UIState.trail`, PITFALLS #45).
+            // 3. Label. Custom back buttons without an identifier still say what they are (a messenger's
             //    chat screen names it "Previous" in the device's language).
             //    There is no edge swipe: on a root screen it landed on a list row and ran the row's swipe
             //    action, "Mark as unread" (PITFALLS #43).
+            let previous = Set(screen.state.trail?.last ?? [])
             let found = items.firstIndex { Self.looksLikeBack($0.identifier) }.map { ($0, "back button \(items[$0].identifier ?? "")") }
-                ?? items.firstIndex { Self.labeledBack($0.caption) }.map { ($0, "button labeled \"\(Self.name(of: items[$0].caption))\"") }
+                ?? items.firstIndex { previous.contains(UIState.name(of: $0.caption)) }.map { ($0, "button named after the previous screen, \"\(UIState.name(of: items[$0].caption))\"") }
+                ?? items.firstIndex { Self.labeledBack($0.caption) }.map { ($0, "button labeled \"\(UIState.name(of: items[$0].caption))\"") }
             if let (index, how) = found {
                 let button = items[index]
                 // Walk to the button again. The green focus box is drawn when focus changes to that element.
@@ -412,20 +422,15 @@ struct BackCommand: ParsableCommand {
                 return
             }
 
-            // 3. Top-left element. Likely the back button, but it could be a side menu or profile (some apps,
-            //    e.g. a social app, put a "side menu" there), so report it instead of pressing.
-            print("Could not go back — no element with a back button identifier or label.")
+            // 4. Nothing. Guessing the top-left element named a header instead of the back button next to
+            //    it, and it can also be a side menu or profile, so don't guess (PITFALLS #45).
+            print("Could not go back — no back button identifier, no element named after the previous screen, and no \"Back\" label.")
+            print("If one of the first elements below is the back button, press it. On a sheet, press its Close/Cancel button.")
             _ = try screen.observe(limit: UIScreen.page)
-            let size = try ScreenCapture.image(rsd: screen.rsd())
-            let corner = try topLeft(screen, width: Double(size.width), height: Double(size.height))
-            if let corner {
-                print("Top-left element: @e\(corner.ref)\t\(corner.caption)")
-                print("If it's the back button, press @e\(corner.ref). Otherwise pick a Close/Cancel button from the list below.")
-            } else {
-                print("No element at the top-left. Pick a Close/Cancel button from the list below and press it.")
-            }
             print(screen.header)
             screen.printPage(screen.state.entries.prefix(UIScreen.page))
+            // Nothing was pressed, which is a failure to the caller (SKILL.md: failures exit non-zero).
+            throw ExitCode.failure
         }
     }
 
@@ -436,14 +441,9 @@ struct BackCommand: ParsableCommand {
         "zurück", "retour", "atrás", "volver", "indietro", "voltar",
     ]
 
-    /// The name part of a description ("Back, Button" → "Back").
-    static func name(of caption: String) -> String {
-        caption.components(separatedBy: ", ").first?.trimmingCharacters(in: .whitespaces) ?? ""
-    }
-
     /// Only the whole name counts, so "Previous month" or "Back up now" isn't taken for a back button.
     static func labeledBack(_ caption: String) -> Bool {
-        backLabels.contains(name(of: caption).lowercased())
+        backLabels.contains(UIState.name(of: caption).lowercased())
     }
 
     /// Identifiers that look like a back/close button. Filters out "back" inside a word, like "playback".
@@ -454,18 +454,6 @@ struct BackCommand: ParsableCommand {
         if parts.contains(where: words.contains) { return true }
         return ["backbutton", "closebutton", "navback", "navigationback", "dismissbutton", "cancelbutton"]
             .contains(where: id.contains)
-    }
-
-    /// Among the first elements, one at the top-left of the screen (within 25% width, 15% height). Measures
-    /// them one by one.
-    private func topLeft(_ screen: UIScreen, width: Double, height: Double) throws -> UIState.Entry? {
-        for index in 0..<min(4, screen.state.entries.count) {
-            let item = try screen.go(to: index)
-            guard let rect = try? screen.measure(item) else { continue }
-            if rect.midX < width * 0.25, rect.midY < height * 0.15 { return screen.state.entries[index] }
-            if rect.midY > height * 0.15 { break }  // already past the top
-        }
-        return nil
     }
 
     private func isSpringBoard(_ pid: Int, _ screen: UIScreen) -> Bool {
