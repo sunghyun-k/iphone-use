@@ -86,7 +86,8 @@ iphone-use type @e36 "Battery" # tap the field and type
 - Each line is `@eN<TAB>description`. The description is **"name, value, traits"**, as VoiceOver
   would read it.
 - The description is **in the device's language.** An English device says `Button`; other devices say
-  it in their own language.
+  it in their own language. Traits are translated too, and a translated trait is still just a trait:
+  the Korean for `Static Text` reads like "fixed text", but it doesn't mean a row is pinned.
 - Traits tell you what the element is: `Button`, `Toggle`, `Search Field`, `Text Field`, `Heading`
   (a title), `Static Text` (text you can't press).
 - A toggle's value is `0` (off) or `1` (on).
@@ -95,6 +96,9 @@ iphone-use type @e36 "Battery" # tap the field and type
   field.
 - `[actions: More Info]` at the end of a line is **a button attached to that element that isn't listed
   separately.** See "Row-end buttons" below.
+- **A row's actions show its state.** They offer the opposite of what the row is now: `Unpin` means
+  it's pinned and `Pin` means it isn't; `Mark as Read` means unread; `Unmute` means muted. Read them
+  instead of guessing from the order or the wording of the row. Don't run them just to find out.
 
 **How to move through the list**
 
@@ -110,10 +114,11 @@ iphone-use type @e36 "Battery" # tap the field and type
   - **On iOS 26+ the Settings search field sits at the very bottom of the screen**, so it shows up at
     the end of the list, around item 40. It isn't missing just because it's not in the first 20. Find
     it with `ui --find "Search Field"` (on other languages, use the translated trait name).
-- **Chats: use `--last`.** A chat opens scrolled to its newest message, but the list runs from the
-  top, so plain `ui` scrolls the chat up to its oldest messages and lists those first. `ui --last`
-  lists the last 20 elements (newest messages, then the input field and send button) and leaves the
-  chat at the bottom; open a chat with `press @eN --last` to get that list right away. After `--last`,
+- **Inside a chat, use `--last`.** (A list of chats is an ordinary list; plain `ui` is right there.)
+  A chat opens scrolled to its newest message, but the list runs from the top, so plain `ui` scrolls
+  the chat up to its oldest messages and lists those first. `ui --last` lists the
+  last 20 elements (newest messages, then the input field and send button) and leaves the chat at the
+  bottom; open a chat with `press @eN --last` to get that list right away. After `--last`,
   `ui --more` goes on to **earlier** messages (`(earlier elements — ui --more)`), and `press`/`type`
   on that screen keep reading from the end, so a sent message shows up as `added`. Plain `ui` goes
   back to listing from the top. Keyboard keys are left out of a `--last` list.
