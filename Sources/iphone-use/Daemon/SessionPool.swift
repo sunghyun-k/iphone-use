@@ -1,8 +1,9 @@
 import Foundation
 
-/// Keeps open tunnel/service connections for reuse.
+/// Keeps open CoreDevice/service connections for reuse.
 ///
-/// Opening a fresh tunnel takes about 0.2 s per command (over 1 s when cold). That's unavoidable for a
+/// Checking in with CoreDeviceService and taking a usage assertion takes about 0.2 s per command
+/// (seconds when the tunnel is cold). That's unavoidable for a
 /// run-once CLI, but as a daemon the cost is paid only once.
 ///
 /// With `keepAlive` off (= a plain CLI run), whatever was borrowed is handed back and closed.
@@ -71,11 +72,11 @@ enum SessionPool {
         return fresh
     }
 
-    /// Accessibility session the daemon holds on to (tunnel path). nil if it can't be opened — the caller takes the normal path.
+    /// Accessibility session the daemon holds on to (`AXSession(services:)`). nil if it can't be opened — the caller takes the normal path.
     static func axSession(udid: String) -> AXSession? {
         guard keepAlive else { return nil }
         if let existing = axCache[udid] { return existing }
-        guard let rsd = try? rsd(udid: udid), let fresh = try? AXSession(tunnel: rsd) else { return nil }
+        guard let rsd = try? rsd(udid: udid), let fresh = try? AXSession(services: rsd) else { return nil }
         axCache[udid] = fresh
         return fresh
     }

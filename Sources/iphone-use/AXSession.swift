@@ -4,10 +4,11 @@ import Foundation
 
 /// A session to the device's accessibility audit daemon.
 ///
-/// There are two transports; from raw socket -> DTXSocketTransport -> DTXConnection onward they are the same.
-/// - USB: the socket of a lockdown service (`AMDeviceSecureStartService`).
-/// - Wi-Fi: a socket checked in to `<service>.shim.remote` inside the tunnel (`LockdownShim`).
-///   MobileDevice cannot see Wi-Fi devices, so this is the only way there.
+/// There are two ways to open it; from raw socket -> DTXSocketTransport -> DTXConnection onward they are the same.
+/// - Inside a MobileDevice session block (`init(device:)`), for one-shot USB runs.
+/// - Through `LockdownShim` (`init(services:)`): USB lockdown when MobileDevice sees the device,
+///   otherwise `<service>.shim.remote`. MobileDevice cannot see Wi-Fi devices. The daemon uses this
+///   one because the session outlives the block.
 /// Either way the wire is plaintext (see CMobileDevice.c for why).
 /// Every call goes out on the control channel (code 0).
 final class AXSession {
@@ -15,10 +16,12 @@ final class AXSession {
     static let serviceName = "com.apple.accessibility.axAuditDaemon.remoteserver"
 
     private let connection: IUDTXConnection
-    /// While the DTX socket lives, whoever handed out the socket (service connection or tunnel) must be kept alive too.
+    /// While the DTX socket lives, whoever handed out the socket must be kept alive too.
     private enum Owner {
         case lockdown(AMDServiceConnectionRef)
-        case tunnel(RemoteServiceDiscovery)
+        /// The socket object stays alive after `detach()`: closing it releases the lockdown service
+        /// connection behind a USB socket, and with that the DTX session goes silent.
+        case services(RemoteServiceDiscovery, TCPSocket)
     }
     private let owner: Owner
 
@@ -69,27 +72,26 @@ final class AXSession {
         connection = try IUDTXConnection(socket: socket)
     }
 
-    /// Tunnel transport. `rsd` is handed back with `SessionPool.release` when the session closes.
-    init(tunnel rsd: RemoteServiceDiscovery) throws {
+    /// `rsd` is handed back with `SessionPool.release` when the session closes.
+    init(services rsd: RemoteServiceDiscovery) throws {
         try IUDTXConnection.loadFramework(atPath: Self.dtxFrameworkPath())
 
         let socket = try LockdownShim.open(Self.serviceName, rsd: rsd)
-        owner = .tunnel(rsd)
+        owner = .services(rsd, socket)
         connection = try IUDTXConnection(socket: socket.detach())
     }
 
     /// Picks the device, opens a session, and closes it when the block ends.
     ///
-    /// If MobileDevice sees the device (USB) it takes the lockdown path, otherwise (Wi-Fi) the tunnel path.
-    /// With `IPHONE_USE_AX_TRANSPORT=tunnel` it uses the tunnel even over USB (for testing the tunnel path).
+    /// If MobileDevice sees the device (USB) it takes the lockdown path, otherwise (Wi-Fi) the shim.
+    /// With `IPHONE_USE_AX_TRANSPORT=tunnel` it uses the shim even over USB (for testing that path).
     static func with<T>(udid wanted: String?, _ body: (AXSession) throws -> T) throws -> T {
         let udid = try DeviceResolver.udid(for: wanted)
 
         // In the daemon the session is not closed but reused for the next request. Opening alone takes
-        // about 1.3 s, which made every `ui`/`press` that much slower. It opens over the tunnel — the
-        // daemon already holds the tunnel, while the lockdown path only lives inside a MobileDevice
-        // session block and can't be held. Devices without a tunnel (iOS 16 and earlier) take the
-        // normal path below.
+        // about 1.3 s, which made every `ui`/`press` that much slower. It opens through `LockdownShim`,
+        // whose service connection outlives the MobileDevice session block. Devices CoreDevice can't
+        // reach (iOS 16 and earlier) take the normal path below.
         if SessionPool.keepAlive, let session = SessionPool.axSession(udid: udid) {
             session.drainEvents()
             session.resetAuditTarget()
@@ -123,16 +125,16 @@ final class AXSession {
                     return try body(session)
                 }
             } catch MobileDeviceError.callFailed {
-                // If the lockdown session can't be opened, fall back to the tunnel. On an iPad (iOS 26.6)
+                // If the lockdown session can't be opened, fall back to the shim. On an iPad (iOS 26.6)
                 // `AMDeviceValidatePairing` failed with 0xE8000025 even when unlocked — the device has only
-                // a CoreDevice pairing and its lockdown record doesn't match. The tunnel path works there.
+                // a CoreDevice pairing and its lockdown record doesn't match. The shim works there.
             }
         }
 
         let rsd = try SessionPool.rsd(udid: udid)
         let session: AXSession
         do {
-            session = try AXSession(tunnel: rsd)
+            session = try AXSession(services: rsd)
         } catch {
             SessionPool.release(rsd)
             throw error
@@ -176,7 +178,8 @@ final class AXSession {
     func close() {
         resetAuditTarget()
         connection.cancel()
-        if case .tunnel(let rsd) = owner {
+        if case .services(let rsd, let socket) = owner {
+            socket.shutdownAndClose()
             SessionPool.release(rsd)
         }
     }

@@ -134,21 +134,22 @@ and combines them.
 
 | | Screen & input | Accessibility tree |
 |---|---|---|
-| Transport | CoreDevice RemoteXPC / RSD tunnel | DTXConnectionServices: lockdown over USB, lockdown shim inside the tunnel over Wi-Fi |
+| Transport | RemoteXPC over sockets handed out by CoreDeviceService | DTXConnectionServices: lockdown over USB, lockdown shim inside the tunnel over Wi-Fi |
 | Device service | `com.apple.coredevice.*` | `com.apple.accessibility.axAuditDaemon.remoteserver` |
 | Host framework | `CoreDeviceMediaStreamSupport`, `UniversalHID` | `AccessibilityAudit`, `MobileDevice` |
 | Code | `Sources/iphone-use/Remote/` | `Sources/CDTXBridge/`, `AXSession.swift` |
 
-**From tunnel to touch.** `devicectl` doesn't expose HID. CoreDevice's HID API is pure Swift with no
+**From socket to touch.** `devicectl` doesn't expose HID. CoreDevice's HID API is pure Swift with no
 `.swiftmodule`, so it can't be bound dynamically. iphone-use therefore speaks RemoteXPC directly:
 
-1. **Tunnel.** Creating a utun needs root. Instead, iphone-use asks the stock
-   `com.apple.CoreDevice.remotepairingd` over libxpc (`RemotePairing.CreateAssertionCommand`) for the
-   address of the tunnel Apple has already opened. This needs no root, doesn't stop `remoted`, and
-   coexists with Xcode.
-2. **RSD port.** This is the remote port of `remoted`'s TCP connection to the tunnel address, found
-   with `nettop`.
-3. **Transport.** HTTP/2 over plain TCP that ignores standard semantics. HEADERS frames are empty,
+1. **Socket.** iphone-use never talks to the device's RSD itself. A second RSD peer displaces
+   macOS's `remoted`, and Xcode then loses the device until it is replugged. Instead it asks the
+   stock `CoreDeviceService` over libxpc, as `devicectl` does, for a usage assertion and then a
+   connected socket per service (`com.apple.coredevice.action.createservicesocket`). No root, no
+   entitlements, and Xcode keeps building and running on the same device.
+2. **Lockdown services.** Accessibility and `installation_proxy` are lockdown services. Over USB they
+   are started with MobileDevice; otherwise iphone-use falls back to the `.shim.remote` copy.
+3. **Transport.** HTTP/2 that ignores standard semantics. HEADERS frames are empty,
    there is no HPACK, and everything travels in DATA frames as XPC envelopes. That is why the
    frames are built by hand.
 4. **HID.** Raw HID reports go to `com.apple.coredevice.hid.universalhidservice`: touchscreen service

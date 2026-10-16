@@ -1,7 +1,7 @@
 import ArgumentParser
 import Foundation
 
-/// Installed apps. installation_proxy is reached through the tunnel, so USB and Wi-Fi behave the same (`InstallationProxy`).
+/// Installed apps. installation_proxy answers in the same shape over USB and Wi-Fi (`InstallationProxy`).
 struct AppsCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "apps",

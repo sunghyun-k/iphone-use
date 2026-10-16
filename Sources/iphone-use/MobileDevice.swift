@@ -84,6 +84,18 @@ final class Device {
         return try body(self)
     }
 
+    /// Starts a lockdown service and returns its connection, which stays usable after the session closes.
+    func startService(_ name: String) throws -> AMDServiceConnectionRef {
+        try withSession { device in
+            var service: AMDServiceConnectionRef?
+            let code = cmd_device_secure_start_service(device.handle, name as CFString, nil, &service)
+            guard code == 0, let service else {
+                throw MobileDeviceError.callFailed("AMDeviceSecureStartService(\(name))", code: code)
+            }
+            return service
+        }
+    }
+
     private func check(_ code: Int32, _ name: String) throws {
         guard code == 0 else { throw MobileDeviceError.callFailed(name, code: code) }
     }

@@ -305,6 +305,9 @@ did this. So the RSD connection retries for up to 8 s, rediscovering the port ea
 1–2 s). After "connection lost", the parentheses say whether the peer closed, sent GOAWAY, or hit a
 socket error.
 
+No longer applies: that RSD connection itself displaced `remoted` and cut Xcode off (#44). Sockets
+now come from CoreDeviceService.
+
 ### 28. The daemon runs the code it was started with
 
 After `swift build`, commands still went to the already running daemon and showed the old behavior,
@@ -648,6 +651,37 @@ screen changed (an unread badge), so `back` even reported "Back (edge swipe)".
   for a button **labeled** as back among the first elements (the messenger's chat screen says "Previous,
   Button" in the device's language); apps that don't use the system back button still label theirs. Only the whole name counts
   ("Previous month" doesn't). If neither is found, it reports the top-left element and presses nothing.
+
+### 44. Our own RSD handshake cut Xcode off from the device
+
+Building and running an app from Xcode or `xcodebuild` while iphone-use was in use hung at "Connecting
+to <device>" and timed out after 60 s ("Timed out waiting for all destinations"). Stopping the daemon
+didn't help; only replugging (once, rebooting) the device did.
+
+`remoted`'s log showed why. Every iphone-use command, daemon or not, opened its own RSD connection
+with `remoted`'s UUID (the old #27 setup). At that moment `remoted` logged `Device must renegotiate
+TLS` and `Device connection interrupted` for the `coredevice-N` device, then retried forever with
+`Heartbeat failed: not connected`. CoreDevice still reported the tunnel as connected, but Xcode's device
+preparation never finished. With a random UUID `remoted` did reconnect within milliseconds, but the
+device then closed the listeners we had just been told about (Connection refused). The device keeps
+one RSD peer per tunnel, so a second peer always displaces someone.
+
+Dead ends: `remote_service_create_connected_socket` from RemoteServiceDiscovery.framework, and
+`remotectl netcat`, are both refused by `remoted` ("Client lacks privilege") for `coredevice-device`
+services. `remotectl reset` doesn't revive the stuck connection.
+
+What works is what devicectl does: check in with `CoreDeviceService` over XPC, take a usage assertion
+(`acquireusageassertion`), then ask for a socket per service (`createservicesocket`). The descriptor
+arrives in the reply, already connected through `remoted`. `CoreDeviceClient` does this, and the RSD
+code (tunnel assertion, `nettop` port lookup, handshake) is gone. Details found along the way:
+
+- The assertion action's reply only arrives when the assertion ends. That it took hold is a
+  `CoreDevice.AssertionFulfilledMessage` sent to the listener passed as `endpoint`.
+- The socket arrives non-blocking; reads fail at once with EAGAIN unless that is cleared.
+- Lockdown shims (`*.shim.remote`) didn't come through it over USB ("A connection to this device could not be
+  established", or no reply). Over USB, accessibility and `installation_proxy` are started with
+  MobileDevice instead, which leaves `remoted` alone. The service connection outlives the lockdown
+  session, but invalidating it silences the DTX session, so it is held until the socket closes.
 
 ## Permissions
 

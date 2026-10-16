@@ -1,7 +1,6 @@
 import Foundation
 
 enum RemoteXPCError: Error, CustomStringConvertible {
-    case connectFailed(host: String, port: Int, reason: String)
     /// Where and how it was closed. The same "closed" has different causes: peer closed, GOAWAY, socket error.
     case closed(String)
     case timeout(String)
@@ -9,8 +8,6 @@ enum RemoteXPCError: Error, CustomStringConvertible {
 
     var description: String {
         switch self {
-        case .connectFailed(let host, let port, let reason):
-            return "connection to [\(host)]:\(port) failed: \(reason)"
         case .closed(let how):
             return "connection lost (\(how))."
         case .timeout(let what):
@@ -21,49 +18,28 @@ enum RemoteXPCError: Error, CustomStringConvertible {
     }
 }
 
-/// A blocking TCP socket opened to a tunnel address.
+/// A blocking socket connected to one device service.
 ///
 /// Everything we do is one request -> one response, so no async is needed. A blocking socket with
 /// just a receive timeout is much shorter and easier to debug.
 final class TCPSocket {
     private var fd: Int32 = -1
+    /// Releases whatever handed out the socket (a lockdown service connection). Runs once, on close.
+    var onClose: (() -> Void)?
 
-    init(host: String, port: Int, timeout: TimeInterval = 10) throws {
-        var hints = addrinfo()
-        hints.ai_family = AF_UNSPEC
-        hints.ai_socktype = SOCK_STREAM
-
-        var info: UnsafeMutablePointer<addrinfo>?
-        let status = getaddrinfo(host, String(port), &hints, &info)
-        guard status == 0, let head = info else {
-            throw RemoteXPCError.connectFailed(
-                host: host, port: port, reason: String(cString: gai_strerror(status)))
-        }
-        defer { freeaddrinfo(info) }
-
-        var lastError = "no address found"
-        var candidate: UnsafeMutablePointer<addrinfo>? = head
-        while let entry = candidate {
-            let socketFD = socket(entry.pointee.ai_family, entry.pointee.ai_socktype, entry.pointee.ai_protocol)
-            if socketFD >= 0 {
-                if connect(socketFD, entry.pointee.ai_addr, entry.pointee.ai_addrlen) == 0 {
-                    fd = socketFD
-                    var value: Int32 = 1
-                    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &value, socklen_t(MemoryLayout<Int32>.size))
-                    // If the peer closes first after we send a no-reply message (clipboard PUSH, etc.),
-                    // write kills the process with SIGPIPE. Take it as an error instead.
-                    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &value, socklen_t(MemoryLayout<Int32>.size))
-                    setReceiveTimeout(timeout)
-                    return
-                }
-                lastError = String(cString: strerror(errno))
-                close(socketFD)
-            } else {
-                lastError = String(cString: strerror(errno))
-            }
-            candidate = entry.pointee.ai_next
-        }
-        throw RemoteXPCError.connectFailed(host: host, port: port, reason: lastError)
+    /// Takes ownership of an already connected socket (from `CoreDeviceClient.serviceSocket`).
+    init(adopting descriptor: Int32, timeout: TimeInterval = 10) {
+        fd = descriptor
+        // CoreDeviceService hands the socket over non-blocking. Left that way, every read fails at
+        // once with EAGAIN and looks like a timeout.
+        let flags = fcntl(fd, F_GETFL)
+        if flags >= 0 { _ = fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) }
+        var value: Int32 = 1
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &value, socklen_t(MemoryLayout<Int32>.size))
+        // If the peer closes first after we send a no-reply message (clipboard PUSH, etc.),
+        // write kills the process with SIGPIPE. Take it as an error instead.
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &value, socklen_t(MemoryLayout<Int32>.size))
+        setReceiveTimeout(timeout)
     }
 
     func setReceiveTimeout(_ seconds: TimeInterval) {
@@ -130,6 +106,8 @@ final class TCPSocket {
             close(fd)
             fd = -1
         }
+        onClose?()
+        onClose = nil
     }
 
     deinit { shutdownAndClose() }
@@ -137,8 +115,6 @@ final class TCPSocket {
 
 /// A connection to one RemoteXPC service on the device.
 ///
-/// The RSD control connection and individual service connections are the same class — the only
-/// difference is whether `sendDeviceHandshake()` is called, which only the RSD control connection does.
 final class RemoteXPCConnection {
     private static let rootChannel: UInt32 = 1
     private static let replyChannel: UInt32 = 3
@@ -149,8 +125,8 @@ final class RemoteXPCConnection {
     /// When a DATA frame arrives cut off in the middle of an XPC envelope, collect it here and append the next frame.
     private var pending = Data()
 
-    init(host: String, port: Int, timeout: TimeInterval = 10) throws {
-        socket = try TCPSocket(host: host, port: port, timeout: timeout)
+    init(socket: TCPSocket) throws {
+        self.socket = socket
         try handshake()
     }
 
@@ -190,23 +166,6 @@ final class RemoteXPCConnection {
             frame = try readFrame()
         }
         try socket.write(HTTP2.frame(.settings, flags: HTTP2.Flag.ack, streamID: 0))
-    }
-
-    /// Called only on the RSD control connection. Introduces this host as a "non-legacy" RemoteXPC peer.
-    ///
-    /// The UUID must match the host `remoted`'s. The device keeps only one RSD connection per tunnel,
-    /// and if a new connection's UUID differs from the previous one it closes every advertised service listener.
-    func sendDeviceHandshake(peerUUID: UUID) throws {
-        try sendRequest([
-            "MessageType": .string("Handshake"),
-            "MessagingProtocolVersion": .uint64(7),
-            "UUID": .uuid(peerUUID),
-            "Properties": .dictionary([
-                "RemoteXPCVersionFlags": .uint64(0x0100_0000_0000_0006),
-                "SensitivePropertiesVisible": .bool(true),
-            ]),
-            "Services": .dictionary([:]),
-        ])
     }
 
     func sendRequest(_ entries: [String: XPCObject], wantingReply: Bool = false) throws {

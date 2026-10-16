@@ -3,7 +3,7 @@ import Foundation
 
 /// Shared setup for commands that need HID input.
 ///
-/// Opens tunnel -> RSD -> HID service in one go and asks for the screen size so pixel coordinates can be
+/// Opens CoreDevice -> HID service in one go and asks for the screen size so pixel coordinates can be
 /// normalized.
 final class InputSession {
     let rsd: RemoteServiceDiscovery
@@ -336,11 +336,11 @@ struct ButtonCommand: ParsableCommand {
     }
 }
 
-/// Tunnel/HID diagnostics.
+/// Service/HID diagnostics.
 struct HIDInfoCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "hid-info",
-        abstract: "Print the tunnel, screen size and registered HID surfaces (diagnostics)."
+        abstract: "Print the device's services, screen size and registered HID surfaces (diagnostics)."
     )
 
     @OptionGroup var device: DeviceOptions
@@ -350,7 +350,6 @@ struct HIDInfoCommand: ParsableCommand {
         defer { session.close() }
 
         let payload: [String: Any] = [
-            "tunnelIP": session.rsd.tunnelIP,
             "screen": ["width": session.screen.width, "height": session.screen.height],
             "services": session.rsd.serviceNames,
             "surfaces": try session.hid.connectedSurfaces().mapValues { $0.jsonReady },

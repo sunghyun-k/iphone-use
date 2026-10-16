@@ -44,7 +44,7 @@ enum DeviceResolver {
         let key = wanted ?? ""
         if let hit = cache[key], Date().timeIntervalSince(hit.at) < cacheLifetime { return hit.udid }
 
-        let current = RemotePairingTunnel.devices().compactMap { info -> Candidate? in
+        let current = RemotePairing.devices().compactMap { info -> Candidate? in
             guard let udid = info["udid"] as? String else { return nil }
             return Candidate(udid: udid, name: info["name"] as? String ?? "?")
         }

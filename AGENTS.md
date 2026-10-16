@@ -57,7 +57,7 @@ Sources/iphone-use/
   Entry.swift        Entry point. Forwards argv to a running daemon, otherwise parses here
   IPhoneUse.swift    Subcommand registration + the shared --udid option
   Commands/          One file per subcommand (keep them thin; logic lives below)
-  Remote/            CoreDevice path: tunnel, RemoteXPC, HID, screenshots, clipboard
+  Remote/            CoreDevice path: service sockets, RemoteXPC, HID, screenshots, clipboard
   Daemon/            Resident mode: connection reuse + Unix-socket RPC
   AXSession.swift    Accessibility path: DTX session (kept open by the daemon)
   AXWire.swift       axAuditDaemon wire format (wrapping/unwrapping envelopes)
@@ -78,7 +78,8 @@ docs/PITFALLS.md        Numbered reverse-engineering notes and dead ends
 
 The two paths are **independent**:
 
-- Screen and input go through the CoreDevice RemoteXPC tunnel.
+- Screen and input go through RemoteXPC, over sockets that CoreDeviceService hands out
+  (`CoreDeviceClient`).
 - Accessibility goes through a lockdown service plus DTX. Over USB it is opened via MobileDevice;
   over Wi-Fi it goes through `.shim.remote` inside the tunnel.
 
@@ -94,6 +95,10 @@ Device-specific traps:
   different layouts.
 - **`MobileDevice` (`DeviceDiscovery`) only sees USB devices.** Don't use it for device lookup in new
   code.
+- **Never talk to the device's RSD yourself.** A second RSD peer displaces macOS's `remoted`, and Xcode
+  can't build to the device until it is replugged (PITFALLS #44). Get sockets from
+  `RemoteServiceDiscovery`, which asks CoreDeviceService. After touching connection code, run
+  `xcodebuild` against the device while iphone-use is in use.
 
 ## Conventions
 

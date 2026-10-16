@@ -23,7 +23,7 @@ struct DevicesCommand: ParsableCommand {
     func run() throws {
         var rows: [[String: String]] = []
 
-        for info in RemotePairingTunnel.devices() {
+        for info in RemotePairing.devices() {
             guard let udid = info["udid"] as? String else { continue }
             let state = info["connectionState"] as? [String: Any]
             let connected = state?["value"] as? [String: Any]

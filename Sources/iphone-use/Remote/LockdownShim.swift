@@ -1,10 +1,11 @@
+import CMobileDevice
 import Foundation
 
-/// Connects to lockdown services exported through the tunnel (`<name>.shim.remote`).
+/// Connects to lockdown services (accessibility, installation_proxy).
 ///
-/// Over USB, lockdown services are opened with `AMDeviceSecureStartService`, but MobileDevice can't
-/// see Wi-Fi devices at all, so that path is closed. Instead the device advertises the same service in
-/// RSD as `.shim.remote`, so we open TCP to that port and just check in.
+/// Over USB they are opened with `AMDeviceSecureStartService`. MobileDevice can't see Wi-Fi devices
+/// at all, and some devices fail lockdown pairing validation (PITFALLS #25), so otherwise we fall back
+/// to the copy the device exports through the tunnel as `<name>.shim.remote` and check in there.
 ///
 /// The check-in is two lockdown-style plists (4-byte big-endian length + XML plist).
 /// Send `{Request: RSDCheckin}` and a reply comes back once under the same name, then once as
@@ -21,14 +22,34 @@ enum LockdownShim {
         }
     }
 
-    /// Returns a socket that has finished check-in. The socket is still owned by the object this function made.
+    /// Returns a socket whose following bytes are the service's own wire.
     static func open(_ serviceName: String, rsd: RemoteServiceDiscovery) throws -> TCPSocket {
+        let forceShim = ProcessInfo.processInfo.environment["IPHONE_USE_AX_TRANSPORT"] == "tunnel"
+        if !forceShim, let socket = openOverUSB(serviceName, udid: rsd.udid) { return socket }
+
         let socket = try rsd.openSocket(to: serviceName + ".shim.remote")
 
         try send(
             ["Label": "iphone-use", "ProtocolVersion": "2", "Request": "RSDCheckin"], on: socket)
         try expect("RSDCheckin", from: socket)
         try expect("StartService", from: socket)
+        return socket
+    }
+
+    /// nil when MobileDevice can't open it, so the caller takes the shim instead.
+    ///
+    /// The service's wire is plaintext even though it was started "securely" (see CMobileDevice.c).
+    private static func openOverUSB(_ serviceName: String, udid: String) -> TCPSocket? {
+        guard let device = try? DeviceDiscovery.device(matching: udid),
+            let service = try? device.startService(serviceName)
+        else { return nil }
+        let descriptor = cmd_service_connection_duplicate_socket(service)
+        guard descriptor >= 0 else {
+            _ = cmd_service_connection_invalidate(service)
+            return nil
+        }
+        let socket = TCPSocket(adopting: descriptor)
+        socket.onClose = { _ = cmd_service_connection_invalidate(service) }
         return socket
     }
 

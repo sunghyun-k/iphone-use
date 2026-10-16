@@ -1,6 +1,6 @@
 import Foundation
 
-/// Installed app list. Uses lockdown's `com.apple.mobile.installation_proxy` through the tunnel shim.
+/// Installed app list. Uses lockdown's `com.apple.mobile.installation_proxy` (`LockdownShim`).
 ///
 /// Why not CoreDevice `appservice`'s `listapps`: it only answered when the result was empty, and with
 /// even one app matched it never answered over Wi-Fi. `devicectl device info apps` tries to grab Wi-Fi
