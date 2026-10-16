@@ -34,13 +34,16 @@ struct UICommand: ParsableCommand {
                 // past the end of the current list.
                 let continuing = more && !screen.state.entries.isEmpty && !screen.state.anchoredAtEnd
                 if !continuing {
-                    _ = try screen.observe(limit: UIScreen.page, fromEnd: false)
+                    // Keeps the direction: re-listing a chat from the top would scroll it (PITFALLS #47).
+                    _ = try screen.observe(limit: UIScreen.page)
                     screen.state.shown = min(UIScreen.page, screen.state.entries.count)
                 }
                 let (hits, stopped) = try screen.find(find, continuing: continuing)
                 print(screen.header)
                 let count = screen.state.entries.count
-                if hits.isEmpty, stopped {
+                if hits.isEmpty, screen.state.anchoredAtEnd {
+                    print("(no element contains \"\(find)\" in the \(count) listed from the end. Searching from the top would scroll this screen back through its history; ui --more lists earlier elements)")
+                } else if hits.isEmpty, stopped {
                     print("(no element contains \"\(find)\" in the first \(count) — ui --find \"\(find)\" --more searches the next \(UIScreen.findLimit))")
                 } else if hits.isEmpty {
                     print("(no element contains \"\(find)\" — checked all \(count) in the list)")
@@ -118,6 +121,17 @@ struct PressCommand: ParsableCommand {
     func run() throws {
         let ref = try parseRef(ref)
         try UIScreen.with(udid: device.udid) { screen in
+            if let head = screen.state.head, head.ref == ref {
+                // The first element of a list taken from the end: jump there instead of walking through
+                // the chat (PITFALLS #47).
+                let item = try screen.goHead()
+                try tap(try screen.measure(item), udid: device.udid, hold: hold)
+                print("Pressed @e\(ref) \(UIScreen.oneLine(item.caption))")
+                if noUi { return }
+                try screen.settle()
+                screen.printReport(try screen.observe(limit: UIScreen.page, fromEnd: last ? true : nil))
+                return
+            }
             let position = try screen.position(of: ref)
             if screen.state.entries[position].revealed == true {
                 // Revealed button: don't walk; tap the rect measured at swipe time (walking can move the list

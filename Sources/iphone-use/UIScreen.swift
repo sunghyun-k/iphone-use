@@ -48,6 +48,9 @@ struct UIState: Codable {
     /// Taken from the last element backward (`ui --last`). `shown` then counts from the end, `--more`
     /// continues toward earlier elements, and walks start from the last element. nil in old list files.
     var fromEnd: Bool?
+    /// In a list taken from the end that doesn't reach the start: the screen's first element, read with a
+    /// single jump (a chat's back button). nil otherwise.
+    var head: Entry?
     var nextRef = 1
 
     init(udid: String) { self.udid = udid }
@@ -489,11 +492,16 @@ final class UIScreen {
     /// direction. If "move to last" doesn't work on the screen, it sweeps from the start as usual.
     func observe(limit: Int, fromEnd wanted: Bool? = nil) throws -> Report {
         state.cursor = nil
+        let oldHead = state.head
+        state.head = nil
         if wanted ?? state.anchoredAtEnd, let swept = try walker.walkFromLast(limit: limit) {
             let report = compare(swept.items, complete: swept.complete, focus: swept.focus, fromEnd: true)
             // Taking the list from the end was for that screen (a chat). If an action led elsewhere (back
             // to the chat list), list the new screen from the start as usual.
-            guard wanted == nil, case .newScreen = report else { return report }
+            guard wanted == nil, case .newScreen = report else {
+                if case .sameScreen = report { try readHead(keeping: oldHead) } else { try readHead(keeping: nil) }
+                return report
+            }
             state.entries = []
             state.cursor = nil
         }
@@ -597,6 +605,45 @@ final class UIScreen {
         state.done = complete
         state.fromEnd = fromEnd ? true : nil
         state.shown = min(Self.page, items.count)
+    }
+
+    /// Reads the screen's first element for a list taken from the end, without walking there.
+    ///
+    /// A chat's back button is its first element, so a list from the end never showed it, and an agent
+    /// looking for it with `ui --find` swept from the top: the chat scrolled to its oldest messages and the
+    /// app loaded older history page after page (PITFALLS #47). Jumping to the first element (the top bar)
+    /// and back to the last doesn't scroll; only stepping on into the messages does.
+    private func readHead(keeping old: UIState.Entry?) throws {
+        guard !state.done, let tail = state.entries.last else { return }
+        state.cursor = nil
+        defer {
+            // Back to the end, where the list was taken. If that doesn't line up, the next walk starts over.
+            if let back = try? walker.end(), back.hex == tail.token { state.cursor = state.entries.count - 1 }
+        }
+        // `first`, not a bare jump: right after a chat opened, the app had already put focus on the first
+        // element, and a jump to where focus is sends no event (PITFALLS #36). `first` steps one away
+        // (into the top bar) and back.
+        guard let item = try walker.first(), item.pid == state.pid,
+            !state.entries.contains(where: { $0.token == item.hex })
+        else { return }
+        if let old, old.caption == item.caption {
+            var kept = old
+            kept.token = item.hex
+            state.head = kept
+        } else {
+            state.head = UIState.Entry(ref: state.nextRef, item: item)
+            state.nextRef += 1
+        }
+    }
+
+    /// Focuses the element `readHead` found, with a single jump.
+    func goHead() throws -> AXWalker.Item {
+        guard let head = state.head else { throw UIError.stale }
+        state.cursor = nil
+        guard let item = try walker.first(), item.hex == head.token || item.caption == head.caption else {
+            throw UIError.stale
+        }
+        return item
     }
 
     /// Executable name for a pid. Empty string without a tunnel (iOS 16 and earlier).
@@ -703,7 +750,12 @@ final class UIScreen {
         // the last element with a check at every step, and on screens whose rows change even while walking
         // (ad rows in a messenger's chat list, etc.) that check failed and stopped with "screen changed".
         // One full sweep only costs the 1–2 seconds of re-walking the first 20.
-        if hits(from: 0).isEmpty, !state.done || state.anchoredAtEnd {
+        // A list from the end is a chat: sweeping from the top would scroll it back through its history.
+        if state.anchoredAtEnd {
+            let head = state.head.map { [$0] } ?? []
+            return (head.filter { $0.caption.localizedCaseInsensitiveContains(text) } + hits(from: 0), false)
+        }
+        if hits(from: 0).isEmpty, !state.done {
             _ = try observe(limit: Self.findLimit, fromEnd: false)
             state.shown = state.entries.count
         }
@@ -728,6 +780,9 @@ final class UIScreen {
     }
 
     func printPage(_ slice: ArraySlice<UIState.Entry>) {
+        if state.anchoredAtEnd, slice.endIndex == state.entries.endIndex, let head = state.head {
+            print("@e\(head.ref)\t\(Self.caption(head))\t(first element, at the top of the screen)")
+        }
         for entry in slice { print("@e\(entry.ref)\t\(Self.caption(entry))") }
         if state.anchoredAtEnd, state.shown < state.entries.count || !state.done {
             print("(earlier elements — ui --more)")

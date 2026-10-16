@@ -120,8 +120,16 @@ iphone-use type @e36 "Battery" # tap the field and type
   last 20 elements (newest messages, then the input field and send button) and leaves the chat at the
   bottom; open a chat with `press @eN --last` to get that list right away. After `--last`,
   `ui --more` goes on to **earlier** messages (`(earlier elements — ui --more)`), and `press`/`type`
-  on that screen keep reading from the end, so a sent message shows up as `added`. Plain `ui` goes
-  back to listing from the top. Keyboard keys are left out of a `--last` list.
+  on that screen keep reading from the end, so a sent message shows up as `added`. Keyboard keys are
+  left out of a `--last` list.
+  - **The first line of a `--last` list can be the screen's first element**, marked
+    `(first element, at the top of the screen)`. In a chat that's the back button. Press it like any
+    ref.
+  - **In a chat, stay with `--last`, `--more` and `--find`.** Plain `ui` lists from the top: the chat
+    scrolls up to its oldest messages, and the app may load older history. In a `--last` list,
+    `ui --find` searches only what has been listed, so it doesn't scroll.
+  - `--more` pages run in screen order, but their refs count down (new refs go to earlier elements).
+    Go by line order, not by ref number.
 - **Always run `ui` before your first action.** This is the user's personal device. They may have just
   been in another app, such as Messages. If it isn't the app or screen you expected, stop and ask the
   user.
@@ -242,7 +250,8 @@ iphone-use paste "🙂" [--file f] / clipboard [-o backup.txt]
 There is no back command. Find the back button in the list and `press` it. It looks like this:
 
 - **It's among the first elements.** It sits in the navigation bar, so it's usually `@e1`, right
-  before the screen's title (a description ending in "Header" or its translation).
+  before the screen's title (a description ending in "Header" or its translation). In a chat (a
+  `--last` list) it's the line marked `(first element, at the top of the screen)`.
 - **It's a button named after the screen you came from**, not "Back". After opening "General" from
   Settings, it's `Settings, Button`. A screen's title is its `Header` element (the `New screen —` line
   shows the app, not the screen), so note it before you press.

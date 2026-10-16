@@ -725,6 +725,32 @@ wait and then fail on screens whose top changes on its own. Instead, SKILL.md su
 It also treats `New screen — <another app>` after a press near the top as a banner tap: don't act
 there, `launch` back.
 
+### 47. Looking for a chat's back button swept the chat through its history
+
+A list from the end (`--last`, #41) never reached a chat's back button, which is the first element.
+An agent looked for it with `ui --find`. `--find` swept from the top for up to 100 elements: the
+chat scrolled to its oldest loaded message, and the app kept loading older history.
+
+We probed a messenger chat (iOS 27.2) one move at a time, comparing box-free frames after each:
+
+- **Jumping to the first element** ("move to first") landed on the back button, and the screen didn't
+  move. It held in three runs. Right after `press … --last` opened one chat, though, the jump sent no
+  event: the app had already put focus on the first element, and a jump to where focus is sends nothing
+  (#36). One step (to the title) and a jump back found it, so the code uses `AXWalker.first`.
+- **Stepping on** through the top bar (title, search, call, menu) didn't move it either.
+- **The next step** reached a date separator in the messages, and the whole chat scrolled up.
+- **Jumping to the last element** brought the chat back to the bottom.
+
+You can't tell where the top bar ends without taking that step, so only the first element is safe.
+
+What the code does now:
+
+- A list from the end that doesn't reach the start reads the first element with a single jump, then
+  jumps back to the end (`UIScreen.readHead`).
+- That element is printed above the list, marked as the first element.
+- `press` on it jumps there again instead of walking (`goHead`).
+- In a list from the end, `ui --find` keeps the direction and searches only what has been listed.
+
 ## Permissions
 
 DeviceHub.app has **empty** entitlements. All trust is handled by the pairing record and the
