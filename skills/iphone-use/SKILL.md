@@ -39,6 +39,9 @@ connection errors.
    `devices` connection column shows `wifi`.
 5. Devices on iOS 16 or earlier can only read the list with `ui`. Pressing and screenshots need iOS 17
    or later.
+6. Suggest turning on **Do Not Disturb** (Control Center) while an agent works. A notification banner
+   covers the top of the screen for a few seconds, and a tap there (a back button, a toolbar button)
+   opens the notification's app instead.
 
 ## Getting started
 
@@ -139,6 +142,9 @@ removed	@e2	Battery, Button, Static Text
 ```
 
 - **New screen**: every old ref is invalid. Use the refs in the new list.
+- **New screen — another app** right after pressing something near the top: the tap probably hit a
+  notification banner. Don't act in that app (it may show private messages); `launch` the app you
+  were in, then `ui` to see where you are.
 - **Same screen**: only the differences are printed:
   - `changed`: a value or state changed, such as a toggle 0→1 or a field's contents.
   - `added`: a new element appeared.

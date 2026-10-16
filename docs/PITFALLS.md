@@ -703,6 +703,28 @@ previous title gets pressed. The agent has seen where it came from, so SKILL.md 
 button looks like (a leading button named after the previous screen, "Back", Close/Cancel on sheets)
 and the agent presses it with `press`.
 
+### 46. A notification banner over the top of the screen takes the tap
+
+A banner covers roughly 6–15% from the top of an iPhone for about five seconds. `press` on a toolbar
+button while one was down opened the notification's app. The banner is not in the accessibility walk
+(`ui` during a banner listed only the app), and the hit test returns nothing (#35).
+
+`press`'s moved-since-measuring check (#42) doesn't catch it: the banner is in both frames.
+
+A guard was prototyped and worked on a device. Before input in the top 22%, it compared a full-width
+strip around the point with the last frame the agent looked at, ignoring the status bar. When only the
+top had changed and the rest of the screen had not, it waited up to 8 s for the banner to leave and
+refused if it stayed.
+
+The reference must come from a look (`screenshot`, the list after `ui`), never from measuring. A
+banner already down then becomes the reference, and the guard passes it. The reference must also be
+dropped after each input, or a control that changes only the top band looks like a banner.
+
+It was not merged. It costs a box-free capture on every `ui` and `press`, adds a state file, and can
+wait and then fail on screens whose top changes on its own. Instead, SKILL.md suggests Do Not Disturb.
+It also treats `New screen — <another app>` after a press near the top as a banner tap: don't act
+there, `launch` back.
+
 ## Permissions
 
 DeviceHub.app has **empty** entitlements. All trust is handled by the pairing record and the
