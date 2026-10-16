@@ -13,8 +13,7 @@ use. It needs no entitlements, no `sudo`, no app on the device and no WebDriverA
 paired device with Developer Mode on.
 
 > **Status:** experimental. The tool depends on undocumented Apple services that can change with any
-> Xcode or iOS release. Verified on an iPhone (iOS 27.2, over Wi-Fi) and an iPad (iPadOS 26.6, over
-> USB, in landscape) with Xcode 27.
+> Xcode or iOS release. Verified on an iPhone (iOS 27.2, over USB) with Xcode 27.
 
 ```console
 $ iphone-use ui
@@ -40,8 +39,7 @@ Element descriptions are what VoiceOver would read, in the device's language.
 
 - macOS with **Xcode** installed. iphone-use uses the frameworks at the path `xcode-select -p`
   reports.
-- A device on **iOS 17 or later** for full control. On iOS 16 and earlier only `ui` and `scan`
-  (reading) work, because those devices have no CoreDevice tunnel.
+- A device on **iOS 27 or later**.
 - Swift 6 toolchain to build. The only dependency is `swift-argument-parser`.
 
 ## Device setup (once per device)

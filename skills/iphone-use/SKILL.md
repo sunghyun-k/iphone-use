@@ -37,8 +37,7 @@ connection errors.
    "Enable Developer Mode", this step isn't done.
 4. Once paired, the device also works **over Wi-Fi on the same network, without the cable**. The
    `devices` connection column shows `wifi`.
-5. Devices on iOS 16 or earlier can only read the list with `ui`. Pressing and screenshots need iOS 17
-   or later.
+5. The device needs iOS 27 or later.
 6. Suggest turning on **Do Not Disturb** (Control Center) while an agent works. A notification banner
    covers the top of the screen for a few seconds, and a tap there (a back button, a toolbar button)
    opens the notification's app instead.
