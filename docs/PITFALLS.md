@@ -697,6 +697,12 @@ name is among the top entry's. Two screens count as the same only if they share 
 identical): a back button shares exactly one name, the previous title, with the screen it returns to.
 The top-left guess is gone; with nothing found, `back` prints the list and presses nothing.
 
+In the end the `back` command was removed. The trail can be wrong whenever the screen changed without
+a list being taken (the user touched the device, `touch`, `swipe`), and then a button sharing the
+previous title gets pressed. The agent has seen where it came from, so SKILL.md describes what a back
+button looks like (a leading button named after the previous screen, "Back", Close/Cancel on sheets)
+and the agent presses it with `press`.
+
 ## Permissions
 
 DeviceHub.app has **empty** entitlements. All trust is handled by the pairing record and the

@@ -12,7 +12,7 @@ struct IPhoneUse: ParsableCommand {
         version: "0.2.0",
         subcommands: [
             // See and act through accessibility (the default)
-            UICommand.self, PressCommand.self, TypeCommand.self, BackCommand.self, HomeCommand.self,
+            UICommand.self, PressCommand.self, TypeCommand.self, HomeCommand.self,
             // Apps
             AppsCommand.self, LaunchCommand.self, OpenCommand.self,
             // Device settings

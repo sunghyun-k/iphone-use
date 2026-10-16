@@ -95,7 +95,6 @@ iphone-use ui                             # first 20 elements, `ui --more` for t
 iphone-use ui --find "Search"             # only elements whose description contains the text
 iphone-use press @e12                     # tap; prints the new screen or only what changed
 iphone-use type @e36 "Battery"            # tap a text field and type
-iphone-use back                           # back button, else an edge swipe
 iphone-use home
 
 iphone-use launch Settings                # app name or bundle ID
@@ -111,7 +110,7 @@ With more than one device, pass `--udid <UDID or name>` to every command, for ex
 
 | Area | Commands | Notes |
 |---|---|---|
-| Read & act via accessibility | `ui`, `press`, `type`, `back`, `home` | Refs (`@eN`) instead of coordinates. After each action it waits for the screen to settle and prints a diff. `press` also has `--hold`, `--trailing` (row-end ⓘ buttons), `--action` and `--swipe` (reveal swipe actions such as Delete). |
+| Read & act via accessibility | `ui`, `press`, `type`, `home` | Refs (`@eN`) instead of coordinates. After each action it waits for the screen to settle and prints a diff. `press` also has `--hold`, `--trailing` (row-end ⓘ buttons), `--action` and `--swipe` (reveal swipe actions such as Delete). |
 | Apps | `apps`, `launch`, `open` | Launch by display name or bundle ID. Open any URL or deep link. |
 | Device settings | `settings`, `location` | Appearance, text size and accessibility toggles; simulated location. These are the same controls as Device Hub's settings panel. |
 | Screen & coordinates | `screenshot`, `wait`, `touch`, `swipe`, `scroll`, `text`, `key`, `button`, `paste`, `clipboard` | For screens with poor accessibility. `screenshot --grid` draws named cells so you can tap by cell instead of guessing pixels. |

@@ -1,6 +1,6 @@
 ---
 name: iphone-use
-description: Operate a real iPhone or iPad connected over USB or Wi-Fi through its accessibility list. Get the screen's elements as a numbered text list (ui), then press by number (press), type into fields (type), and go back (back), all without images. Also launches apps and deep links, takes screenshots and taps coordinates (for screens with poor accessibility), presses hardware buttons, and changes appearance, accessibility settings and the simulated location. Use it when a task needs a physical device, not a simulator.
+description: Operate a real iPhone or iPad connected over USB or Wi-Fi through its accessibility list. Get the screen's elements as a numbered text list (ui), then press by number (press), and type into fields (type), all without images. Also launches apps and deep links, takes screenshots and taps coordinates (for screens with poor accessibility), presses hardware buttons, and changes appearance, accessibility settings and the simulated location. Use it when a task needs a physical device, not a simulator.
 ---
 
 # iphone-use
@@ -76,7 +76,6 @@ iphone-use ui --find "Search"  # only elements whose description contains this; 
 iphone-use ui --last          # the last 20 instead: a chat's newest messages and its input field
 iphone-use press @e12         # press → reports the resulting screen
 iphone-use type @e36 "Battery" # tap the field and type
-iphone-use back               # previous screen
 ```
 
 **How to read a list line**
@@ -121,7 +120,7 @@ iphone-use back               # previous screen
 
 ### Reading results
 
-`press`, `type`, `back`, `key`, `launch` and `open` wait for the screen to settle, then print the
+`press`, `type`, `key`, `launch` and `open` wait for the screen to settle, then print the
 result. You don't need a separate `ui`.
 
 ```
@@ -160,7 +159,6 @@ removed	@e2	Battery, Button, Static Text
 | "kept moving on screen after it was measured" | The list scrolled or something loaded above the element. Nothing was pressed. Run `ui` and press again |
 | "could not measure the element" | The element is covered or has no size. See "Screens with poor accessibility" |
 | "The on-screen keyboard did not appear" | What you pressed isn't a text field. Find a `Search Field`/`Text Field` with `ui --find "Field"` and use `type @eN` |
-| "There is no back on the home screen" | Open apps with `launch` |
 
 ## Commands
 
@@ -175,7 +173,6 @@ iphone-use press @eN --trailing                   # press the right-end area of 
 iphone-use press @eN --swipe left|right           # short swipe on a row to reveal hidden buttons (Delete etc.)
 iphone-use type @eN "text" [--enter] [--clear]    # tap the field and type; --clear erases what was there
 iphone-use type "text" [--enter]                  # keep typing into the already focused field
-iphone-use back                                   # previous screen (see "Going back")
 iphone-use home                                   # to the home screen (no list)
 iphone-use key esc|enter|backspace|tab|cmd+a|ctrl+space ...   # a single key → result list
 
@@ -231,22 +228,24 @@ iphone-use paste "🙂" [--file f] / clipboard [-o backup.txt]
 
 ## Going back
 
-`back` tries these in order and says which one it used.
+There is no back command. Find the back button in the list and `press` it. It looks like this:
 
-1. Press a leading element whose **identifier marks it as a back or close button** (`BackButton` and
-   the like).
-2. Otherwise, press a leading element **named after the previous screen**. A system back button is
-   named after the previous screen's title ("Settings"), not "Back". `back` knows the previous screen
-   only if you got here with `press`, `type` or another command that prints the result list.
-3. Otherwise, press a leading element **named** as a back button ("Back", "Previous" or a translation). Apps with
-   their own back button usually name it that way.
-4. Otherwise it **doesn't press anything**. It says "Could not go back" and prints the list. It never
-   swipes and never guesses.
-   - If one of the first elements is a back button (named "Back" or the previous screen's title), `press` it.
-   - For sheets and popups, find Close, Cancel or Done with `ui --find Close` and press it.
-   - The first elements can also be a side menu or a profile button. Read the description before pressing.
-- **A screen in search mode** (e.g. Settings' first screen showing search results) doesn't leave with
-  `back`. Press the `Close` (or `Cancel`) button next to the search field. On iOS 26+ it's in the
+- **It's among the first elements.** It sits in the navigation bar, so it's usually `@e1`, right
+  before the screen's title (a description ending in "Header" or its translation).
+- **It's a button named after the screen you came from**, not "Back". After opening "General" from
+  Settings, it's `Settings, Button`. A screen's title is its `Header` element (the `New screen —` line
+  shows the app, not the screen), so note it before you press.
+- **Some apps name it "Back", "Previous" or a translation** ("뒤로", "이전"), in the device's language.
+- **Sheets and popups have Close, Cancel or Done instead**, usually at the top. Find it with
+  `ui --find Close`.
+- **Root screens have none.** In an app with a tab bar, switch tabs (the tabs are at the end of the
+  list: `ui --last`), or leave with `home` / `launch`.
+
+A first element can also be a side menu or a profile button. Read the description before pressing.
+Don't swipe from the left edge to go back: the swipe can land on a list row and run its swipe action.
+
+- **A screen in search mode** (e.g. Settings' first screen showing search results) has no back button.
+  Press the `Close` (or `Cancel`) button next to the search field. On iOS 26+ it's in the
   bottom search bar, so it's at the end of the list: `ui --find Close` → `press`. `key esc` only
   dismisses the keyboard, or does nothing.
 

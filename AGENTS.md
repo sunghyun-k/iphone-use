@@ -62,7 +62,7 @@ Sources/iphone-use/
   AXSession.swift    Accessibility path: DTX session (kept open by the daemon)
   AXWire.swift       axAuditDaemon wire format (wrapping/unwrapping envelopes)
   AXWalker.swift     Moving focus + measuring element rects from the green focus box
-  UIScreen.swift     Basis of ui/press/type/back: @e ref lists, walking to an element, post-action diff
+  UIScreen.swift     Basis of ui/press/type: @e ref lists, walking to an element, post-action diff
   TextRecognizer.swift  Screenshot OCR (Vision). Only detects whether the on-screen keyboard is up; never picks targets
   ScreenGrid.swift   Named grid for screenshot --grid and cell math for touch/swipe --cell
   HangulKeys.swift   Hangul -> Dubeolsik key positions (text/type)
