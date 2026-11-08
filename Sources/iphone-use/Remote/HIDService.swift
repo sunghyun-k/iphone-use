@@ -41,9 +41,23 @@ final class HIDService {
     /// into a double press (app switcher). In a daemon that kept the connection open, even 0.55 s merged; 0.8 s stopped it.
     private static let buttonSettle: TimeInterval = 0.8
 
+    /// How long a new `universalhidservice` connection must exist before its first report.
+    ///
+    /// The device creates this connection's touchscreen and keyboard surfaces when it connects (PITFALLS
+    /// #11), and reports that arrive before they are ready are dropped without an error. Normally that
+    /// takes no time, but with the device busy (screenshots being taken back to back) taps sent right
+    /// after connecting were lost 34 times out of 85, and taps sent 0.15 s or more later once in 140
+    /// (PITFALLS #54).
+    static let surfaceSettle: TimeInterval = 0.4
+    /// When `universal` finished its handshake.
+    private let connectedAt: Date
+    /// Set once the first report has waited out `surfaceSettle`.
+    private var surfaceReady = false
+
     init(rsd: RemoteServiceDiscovery) throws {
         self.rsd = rsd
         universal = try rsd.connect(to: "com.apple.coredevice.hid.universalhidservice")
+        connectedAt = Date()
     }
 
     private func indigo() throws -> RemoteXPCConnection {
@@ -190,6 +204,11 @@ final class HIDService {
     }
 
     func sendReport(surface: UInt64, report: Data) throws {
+        if !surfaceReady {
+            let remaining = Self.surfaceSettle - Date().timeIntervalSince(connectedAt)
+            if remaining > 0 { Thread.sleep(forTimeInterval: remaining) }
+            surfaceReady = true
+        }
         try universal.sendRequest([
             "featureIdentifier": .string("com.apple.coredevice.feature.remote.universalhidservice"),
             "messageType": .string("Request"),

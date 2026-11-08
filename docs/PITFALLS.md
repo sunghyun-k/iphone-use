@@ -906,3 +906,54 @@ What the code does now:
 - `InputSession.open` points `HIDService.touchSurface` at the panel's surface.
 - The daemon no longer caches the screen size: folding or turning the phone changes it, and the
   lookup costs about 50 ms over the daemon's held connection (30 ms to connect, 20 ms for the call).
+
+## Input timing
+
+### 54. A new HID connection drops the reports it gets while the device is busy
+
+After #50 the daemon opens `universalhidservice` per command, like a plain CLI run. Taps still went
+missing now and then: `press` printed `Pressed …`, the screen didn't change, and pressing again
+worked. With the device idle it never failed (about 300 taps through the daemon, folded and unfolded,
+fresh daemon, right after `open`, after 12 s of idle). With the device busy it failed often: with
+three `screenshot --no-daemon` loops running alongside, taps on the Clock tab bar were lost, through
+the daemon and with `--no-daemon` alike.
+
+How often swings a lot over time: the same setup lost 15 of 15 in one run and 0 of 15 half an hour
+later. So variants are only compared **interleaved tap by tap**, never run after run. Under load,
+summed over five interleaved runs:
+
+| first report after the connection opened | lost |
+|---|---|
+| at once (the old behavior) | 34/85 |
+| 0.06 s, 0.1 s | 30/30 |
+| 0.15 s | 0/35 |
+| 0.2 s, 0.3 s | 0/30 |
+| 0.25 s | 8/20 (one run) |
+| 0.4 s | 1/55 |
+| 0.6 s | 0/20 |
+| at once, 0.2 s hold instead of 0.08 s | 1/50 |
+
+Without load every variant lost 0 of 20. A tap needs about 0.05 s of contact on the device at all
+(idle: a 0.02 s hold lost 6/6, 0.04 s 2/6, 0.08 s none).
+
+So it is time since the connection opened. `dtuhidd` creates a touchscreen and keyboard surface for
+each connection (#11); reports that arrive before a busy device has them in place are dropped, and
+the PING that ends the command (#16) is still answered.
+
+What didn't explain or fix it:
+
+- **Wi-Fi delivery.** The PING round trip does jump to 100–600 ms after half a second of idle (the
+  device's power saving), but the PING after a tap's release came back in 11–25 ms every time: the
+  reports weren't held up in flight.
+- **A PING before the first report.** One PING after connecting: 28 of 30 lost under load. PINGing
+  every 50 ms through the wait was worse than a plain sleep, even without load (9 of 30 lost). The
+  HTTP/2 layer answering says nothing about the surfaces, and the PINGs seem to get in the way.
+
+What the code does: `HIDService` sleeps until its connection is `surfaceSettle` (0.4 s) old before the
+first report, and `InputSession.open` connects HID before asking for the screen size, so that lookup
+uses up part of the wait. The hold stays 0.08 s, so a tap is still a short tap to apps. Every touch
+and key command costs up to 0.4 s more; only the first report waits, so a long `text` pays it once.
+Buttons go through `hid.indigo` and don't wait.
+
+The losses that led here were on the foldable's cover panel, right after a fresh daemon or an `open`:
+moments when the device was busy.

@@ -19,10 +19,18 @@ final class InputSession {
 
     static func open(udid: String?) throws -> InputSession {
         let rsd = try SessionPool.rsd(udid: udid)
+        // HID first: its first report has to wait until the connection is `HIDService.surfaceSettle` old
+        // (PITFALLS #54), and the screen lookup below uses up part of that wait.
+        let hid = try SessionPool.hid(udid: udid, rsd: rsd)
         // Asked every time, even by the daemon: folding the phone switches panels and sizes (PITFALLS #51).
         // It costs about 50 ms over a held connection.
-        let screen = try ScreenSize.query(rsd: rsd)
-        let hid = try SessionPool.hid(udid: udid, rsd: rsd)
+        let screen: ScreenSize
+        do {
+            screen = try ScreenSize.query(rsd: rsd)
+        } catch {
+            hid.close()
+            throw error
+        }
         hid.touchSurface = screen.touchSurface
         return InputSession(rsd: rsd, hid: hid, screen: screen)
     }

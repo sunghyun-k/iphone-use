@@ -36,7 +36,8 @@ enum SessionPool {
     /// answering PINGs while the device silently stopped acting on the reports sent over it: taps printed
     /// success and nothing happened, while `--no-daemon` worked at once (PITFALLS #50). The tunnel stays
     /// cached, so a fresh connection costs one RemoteXPC handshake (about 0.06 s over Wi-Fi; buttons
-    /// open a second, slower one only when needed).
+    /// open a second, slower one only when needed), plus the wait before its first report that a new
+    /// connection needs (`HIDService.surfaceSettle`, PITFALLS #54).
     static func hid(udid: String?, rsd: RemoteServiceDiscovery) throws -> HIDService {
         try HIDService(rsd: rsd)
     }
