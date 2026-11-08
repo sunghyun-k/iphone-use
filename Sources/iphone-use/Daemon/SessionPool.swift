@@ -7,13 +7,13 @@ import Foundation
 /// run-once CLI, but as a daemon the cost is paid only once.
 ///
 /// With `keepAlive` off (= a plain CLI run), whatever was borrowed is handed back and closed.
-/// With it on (= daemon), nothing is closed; it's held and handed out again for the next request.
+/// With it on (= daemon), the tunnel and screen size are held and handed out again for the next
+/// request. HID connections are the exception: they are opened and closed per command (PITFALLS #50).
 enum SessionPool {
-    /// Only the daemon turns this on. From then on connections are never closed.
+    /// Only the daemon turns this on. From then on the tunnel is never closed.
     nonisolated(unsafe) static var keepAlive = false
 
     private nonisolated(unsafe) static var cached: [String: RemoteServiceDiscovery] = [:]
-    private nonisolated(unsafe) static var hidCache: [String: HIDService] = [:]
     private nonisolated(unsafe) static var screenCache: [String: ScreenSize] = [:]
 
     static func rsd(udid: String?) throws -> RemoteServiceDiscovery {
@@ -31,33 +31,29 @@ enum SessionPool {
         rsd.close()
     }
 
+    /// Opens a new HID connection for every command, even in the daemon.
+    ///
+    /// The daemon used to keep one HID connection for its whole life. After a while that connection kept
+    /// answering PINGs while the device silently stopped acting on the reports sent over it: taps printed
+    /// success and nothing happened, while `--no-daemon` worked at once (PITFALLS #50). The tunnel stays
+    /// cached, so a fresh connection costs one RemoteXPC handshake (about 0.06 s over Wi-Fi; buttons
+    /// open a second, slower one only when needed).
     static func hid(udid: String?, rsd: RemoteServiceDiscovery) throws -> HIDService {
-        guard keepAlive else { return try HIDService(rsd: rsd) }
-
-        let key = udid ?? ""
-        if let existing = hidCache[key] { return existing }
-        let fresh = try HIDService(rsd: rsd)
-        hidCache[key] = fresh
-        return fresh
+        try HIDService(rsd: rsd)
     }
 
-    /// Returns only after the input sent has fully reached the device (see `HIDService.sync()`).
+    /// Returns only after the input sent has fully reached the device (see `HIDService.sync()`), then
+    /// closes the connection.
     ///
-    /// The daemon doesn't close the connection but still syncs. Otherwise the command finishes while the
-    /// device hasn't read the input yet, and an immediate `screenshot` captures the screen from before
-    /// the input. If the PING fails here, the held connection is dead, so let it go and the next request
-    /// opens a new one.
+    /// If the PING fails in the daemon, the tunnel the connection came from may be bad too, so let
+    /// everything go and the next request opens fresh.
     static func release(_ hid: HIDService) {
-        guard keepAlive else {
-            try? hid.sync()
-            hid.close()
-            return
-        }
         do {
             try hid.sync()
         } catch {
-            drop()
+            if keepAlive { drop() }
         }
+        hid.close()
     }
 
     /// Screen size doesn't change unless the device rotates, so it can be cached.
@@ -73,9 +69,7 @@ enum SessionPool {
 
     /// Releases everything held, so the next request opens fresh when a connection has gone bad.
     static func drop() {
-        for hid in hidCache.values { hid.close() }
         for rsd in cached.values { rsd.close() }
-        hidCache = [:]
         cached = [:]
         screenCache = [:]
     }

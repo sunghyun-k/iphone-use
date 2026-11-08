@@ -2,7 +2,8 @@ import Foundation
 
 /// Injects real input events into the device.
 ///
-/// Uses two RemoteXPC services.
+/// Uses two RemoteXPC services. Every command opens its own and closes it when done, even in the
+/// daemon (PITFALLS #50).
 /// - `universalhidservice`: plugs **raw HID reports** into HID surfaces the device has already registered.
 ///   The main touchscreen is `_ServiceID 257`.
 /// - `hid.indigo`: hardware button (volume, etc.) state changes.
@@ -22,7 +23,10 @@ final class HIDService {
     private static let stateRelease: UInt8 = 0x02
 
     private let universal: RemoteXPCConnection
-    private let indigo: RemoteXPCConnection
+    private let rsd: RemoteServiceDiscovery
+    /// Opened on the first button press. Touch and keys don't need it, and every connection costs a
+    /// handshake now that the daemon opens HID per command (PITFALLS #50).
+    private var indigoConnection: RemoteXPCConnection?
     /// When a button was last released. `sync()` waits for a while after this.
     private var lastButtonRelease: Date?
     /// How long to wait after releasing a button before the next action.
@@ -30,17 +34,24 @@ final class HIDService {
     /// The home button waits a moment after release while the device decides whether it's a double
     /// click. If the connection closes in that window, the press itself is canceled (Wi-Fi measurement:
     /// at 0.3 s every press was ignored, from 0.45 s every one registered), and a following press merges
-    /// into a double press (app switcher). In the daemon, with no cost to reopening, even 0.55 s merged; 0.8 s stopped it.
+    /// into a double press (app switcher). In a daemon that kept the connection open, even 0.55 s merged; 0.8 s stopped it.
     private static let buttonSettle: TimeInterval = 0.8
 
     init(rsd: RemoteServiceDiscovery) throws {
+        self.rsd = rsd
         universal = try rsd.connect(to: "com.apple.coredevice.hid.universalhidservice")
-        indigo = try rsd.connect(to: "com.apple.coredevice.hid.indigo")
+    }
+
+    private func indigo() throws -> RemoteXPCConnection {
+        if let indigoConnection { return indigoConnection }
+        let opened = try rsd.connect(to: "com.apple.coredevice.hid.indigo")
+        indigoConnection = opened
+        return opened
     }
 
     func close() {
         universal.close()
-        indigo.close()
+        indigoConnection?.close()
     }
 
     /// List of registered HID surfaces. For diagnostics.
@@ -65,11 +76,11 @@ final class HIDService {
     /// drops the connection right after sending that reply, then ignores new connection handshakes for
     /// nearly 10 seconds (looks like launchd's restart throttling). Commands issued back to back all time out.
     ///
-    /// Right after a button release, wait a bit longer (`buttonSettle`). Even the daemon, which doesn't
-    /// close the connection, waits — otherwise repeated `button home` merges into a double press and the app switcher appears.
+    /// Right after a button release, wait a bit longer (`buttonSettle`). Otherwise the press is canceled
+    /// by the close, or repeated `button home` merges into a double press and the app switcher appears.
     func sync() throws {
         try universal.ping()
-        try indigo.ping()
+        try indigoConnection?.ping()
         if let released = lastButtonRelease {
             let remaining = Self.buttonSettle - Date().timeIntervalSince(released)
             if remaining > 0 { Thread.sleep(forTimeInterval: remaining) }
@@ -248,7 +259,7 @@ final class HIDService {
     }
 
     func sendButton(usagePage: UInt64, usageCode: UInt64, state: ButtonState) throws {
-        try indigo.sendRequest([
+        try indigo().sendRequest([
             "messageType": .string("IndigoButtonEvent"),
             "payload": .dictionary([
                 "state": .uint64(state.rawValue),

@@ -832,3 +832,34 @@ What the code does now: when the settle reports a moving area or never settles, 
 frame captured about 1.2 s after the input (`UIScreen.observeAfterAction`, `Settle.early`) and says so.
 Over a screen that settles normally nothing changes. Five tries out of five listed the controls.
 
+## Daemon input pitfalls
+
+### 50. A long-held HID connection stopped delivering input while still answering PINGs
+
+The daemon used to open `universalhidservice` and `hid.indigo` once and keep them for its whole life,
+syncing each command with a PING (#16). On an iPhone over Wi-Fi (iOS 27.3), after the daemon had
+served many commands (back-to-back screenshots, `ui`, `touch`, `press`), `touch` kept printing
+`Tapped …` while nothing happened on screen, for over a minute of retries. The PING still got its
+ACK, so nothing looked wrong. The same command with `--no-daemon` worked at once, and a fresh daemon
+worked too.
+
+We could not reproduce it on demand. Ruled out, measured on the same iPhone:
+
+- **HTTP/2 flow control.** The device advertises a 1 MiB initial window and does send WINDOW_UPDATE
+  (connection and stream) once about half of it is used. After 1.1 MB of reports on one connection,
+  a tap still landed.
+- **Locking and unlocking the screen** with a daemon connection open: the next tap landed.
+- **A `--no-daemon` HID client running alongside** the daemon (checked when the bug was found).
+
+What we know points at per-connection state on the device: `dtuhidd` creates the virtual touchscreen
+and keyboard surfaces for each `universalhidservice` connection and deletes them when it closes (#11).
+If that surface goes away or stops being routed while the connection stays up, reports are read
+(so the PING is answered) and dropped. A new connection gets new surfaces.
+
+So the daemon now opens HID per command and closes it after the PING, exactly like a plain CLI run;
+only the tunnel and screen size stay cached. That made a daemon `touch` about 0.12 s instead of
+0.06 s. The `hid.indigo` connection was the expensive one (opening both took 0.25–1.1 s over Wi-Fi),
+so it is opened only when a button is pressed. Repeated `button home` still does not merge into a
+double press with the per-command close (#17's 0.8 s wait covers it).
+
+If it shows up again, the next step is the device syslog filtered to `dtuhidd` while a tap fails.
