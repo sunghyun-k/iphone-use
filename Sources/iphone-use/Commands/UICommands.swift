@@ -10,8 +10,8 @@ struct UICommand: ParsableCommand {
         discussion: """
             Each line is `@tN<TAB>text<TAB>grid cell`, top to bottom. Pass the ref to press / type. Controls
             without text are found by their shape and listed in brackets: `[toggle on] Wi-Fi` (a switch, its
-            state and its row's label), `[chevron left]` (a common symbol), `[icon]` (an unrecognized icon).
-            Only what's on screen is listed; scroll to see more. On the same screen refs stay the same; on a
+            state and its row's label), `[chevron left]` (a common symbol), `[icon]` (an unrecognized icon; --icons
+            asks the Mac's on-device model to name it: `[icon: paper plane]`). Only what's on screen is listed; scroll to see more. On the same screen refs stay the same; on a
             new screen numbering restarts at 1.
             """
     )
@@ -24,12 +24,16 @@ struct UICommand: ParsableCommand {
     @Flag(name: .long, help: "Wait for the screen to settle first (after a change you made with --no-ui or by hand).")
     var wait = false
 
+    @Flag(name: .long, help: "Name each unrecognized [icon] with the Mac's on-device model ([icon: paper plane]). About 0.5 s per icon.")
+    var icons = false
+
     func run() throws {
         try UIScreen.with(udid: device.udid) { screen in
             let image = wait ? try screen.settle() : try screen.capture()
             // Matched against the last list, so refs from it stay valid on the same screen; the whole list
             // is printed either way.
             _ = try screen.observe(image)
+            if icons { screen.nameIcons(in: image) }
             guard let find else {
                 print("\(screen.state.entries.count) lines")
                 screen.printList(screen.state.entries)
@@ -91,6 +95,10 @@ struct PressCommand: ParsableCommand {
         let ref = try parseRef(ref)
         try UIScreen.with(udid: device.udid) { screen in
             let entry = try screen.entry(ref)
+            // HID before the screenshot: a new connection's first report waits until it is 0.4 s old
+            // (PITFALLS #54), and finding the line again takes about that long, so the two overlap.
+            let input = try InputSession.open(udid: screen.udid)
+            defer { input.close() }
             let (rect, moved) = try screen.locate(entry)
             let width = Double(screen.state.width), height = Double(screen.state.height)
             let label = "@t\(ref) \"\(entry.text)\"\(moved ? " (it had moved; found it again by its text)" : "")"
@@ -98,15 +106,16 @@ struct PressCommand: ParsableCommand {
                 guard rect.midY > height * 0.12, rect.midY < height * 0.85 else {
                     throw UIError.rowNotSwipeable(entry.text)
                 }
-                try Self.reveal(atY: rect.midY, width: width, toward: swipe, udid: device.udid)
+                try Self.reveal(atY: rect.midY, width: width, toward: swipe, input: input)
                 print("Swiped \(swipe.rawValue) the row of \(label)")
             } else if trailing {
-                try tap(Self.trailing(rowAt: rect, width: width), udid: device.udid, hold: hold)
+                try tap(Self.trailing(rowAt: rect, width: width), input: input, hold: hold)
                 print("Pressed the right end of the row of \(label)")
             } else {
-                try tap(rect, udid: device.udid, hold: hold)
+                try tap(rect, input: input, hold: hold)
                 print("Pressed \(label)")
             }
+            input.close()  // waits for the input to reach the device before the screen is read again
             if noUi { return }
             screen.printReport(try screen.observeAfterAction())
         }
@@ -115,9 +124,7 @@ struct PressCommand: ParsableCommand {
     /// Swipes only 35% of the screen width, just enough to reveal the buttons. A full swipe **triggers the
     /// first button immediately** — in Messages it deletes the conversation. So push short and slow. The
     /// outer 4px are system gestures, so start 10% inside.
-    static func reveal(atY y: Double, width: Double, toward side: SwipeSide, udid: String?) throws {
-        let input = try InputSession.open(udid: udid)
-        defer { input.close() }
+    static func reveal(atY y: Double, width: Double, toward side: SwipeSide, input: InputSession) throws {
         let near = width * 0.1, travel = width * 0.35
         let startX = side == .left ? width - near : near
         let endX = side == .left ? startX - travel : startX + travel
@@ -137,6 +144,10 @@ struct PressCommand: ParsableCommand {
 func tap(_ rect: CGRect, udid: String?, hold: Double = 0.08) throws {
     let input = try InputSession.open(udid: udid)
     defer { input.close() }
+    try tap(rect, input: input, hold: hold)
+}
+
+func tap(_ rect: CGRect, input: InputSession, hold: Double = 0.08) throws {
     let point = input.normalized(rect.midX, rect.midY)
     if hold >= 0.4 {
         try input.hid.press(x: point.x, y: point.y, duration: hold)
@@ -186,13 +197,15 @@ struct TypeCommand: ParsableCommand {
         let keys = try TextCommand.keys(for: text)
 
         try UIScreen.with(udid: device.udid) { screen in
+            // Opened first so its 0.4 s settle (PITFALLS #54) overlaps finding the field.
+            let input = try InputSession.open(udid: screen.udid)
+            defer { input.close() }
             if let ref {
                 let (rect, _) = try screen.locate(try screen.entry(ref))
-                try tap(rect, udid: device.udid)
+                try tap(rect, input: input)
             }
             guard try keyboardAppears(rsd: screen.rsd, wait: ref != nil) else { throw UIError.noKeyboard }
 
-            let input = try InputSession.open(udid: device.udid)
             if clear {
                 try input.hid.typeKey(0x04, modifiers: [0xE3])  // ⌘A
                 try input.hid.typeKey(0x2A, modifiers: [])  // Backspace

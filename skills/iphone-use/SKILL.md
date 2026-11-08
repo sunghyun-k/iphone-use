@@ -1,6 +1,6 @@
 ---
 name: iphone-use
-description: Operate a real iPhone or iPad connected over USB or Wi-Fi. Read the screen as a numbered list (text, plus toggles with their on/off state and common icons) with a gridded screenshot next to it (ui), press a line by number (press), tap other icons by grid cell (touch --cell), and type into fields (type). Also launches apps and deep links, scrolls, presses hardware buttons, and changes appearance, accessibility settings and the simulated location. Use it when a task needs a physical device, not a simulator.
+description: Operate a real iPhone or iPad connected over USB or Wi-Fi. Read the screen as a numbered list (text, plus toggles with their on/off state and common icons) with a gridded screenshot next to it (ui), press a line by its @tN ref (press), tap other icons by grid cell (touch --cell), and type into fields (type). Also launches apps and deep links, scrolls, presses hardware buttons, and changes appearance, accessibility settings and the simulated location. Use it when a task needs a physical device, not a simulator.
 ---
 
 # iphone-use
@@ -94,13 +94,20 @@ iphone-use type @t2 "Battery" # tap the field (here its placeholder text) and ty
   screen where you pick the value. Press the row.
 - The grid cell is where the line's center is on the saved screenshot.
 - **Only what's on screen is listed.** To see more, `scroll down` (it prints the new list).
+- **An iPad often shows two panes** (Settings, Mail: a sidebar on the left, the detail on the right).
+  Both are in one list, ordered by row; the grid column tells which pane a line is in.
+- **The back button can be text**: `◀ Settings` at the top left on an iPad (back to the app that opened
+  this one), or `[chevron left]`.
 - **`[bracketed]` lines are controls without text**, found by their shape. Press them like any line.
   - `[toggle on] Wi-Fi` / `[toggle off] …`: a switch, its state, and the label to its left. Pressing it
     flips the switch.
   - `[chevron left]`, `[plus]`, `[info circle]`, `[checkmark]`, `[magnifyingglass]` …: a common icon,
     named after its SF Symbol. `[chevron left]` near the top is usually the back button.
   - `[icon]`: an icon that wasn't recognized (an app's own artwork). Look at the screenshot to see what
-    it is before pressing it.
+    it is before pressing it, or run `ui --icons` to have the Mac's on-device model name each one:
+    `[icon: paper plane]`, `[icon: download]`. That takes about half a second per icon, and the name is
+    a guess, like any bracketed line. Pieces of a picture can show up as icons too (`[icon: cat face]`
+    inside a banner). A named icon keeps its name in later lists while it stays put and looks the same.
 - **Still not in the list**: images, colors, badges, which tab is selected, empty fields, and icons
   over a photo or video (a floating glass tab bar). Look at the screenshot for those, and
   `touch --cell G21` an icon that has no line.
@@ -140,11 +147,14 @@ added	@t24	Battery Health	C6
 
 - **New screen**: every old ref is invalid. Use the refs in the new list.
 - **Same screen**: only the differences are printed:
-  - `changed`: different text in the same place, such as a field's contents.
+  - `changed`: different text in the same place, such as a field's contents. The ref now means the
+    new text. When many lines changed (an iPad's split view, where the sidebar stays and the right
+    pane changes), it's simpler to read the whole list again with `ui`.
   - `added`: a new line appeared (new ref).
   - `removed`: a line disappeared.
 
-  Every other ref stays valid.
+  Every other ref stays valid. On a screen that keeps moving (a banner carousel, an animation), lines
+  come and go between two reads even without input, so take refs from the latest list.
 - `moved`: a few lines changed place while the rest stayed, such as a check mark that went to the row
   you picked: `moved	@t9	✓	H8	(was: H10)`. When the whole list moves (a scroll), nothing is listed
   as moved.
@@ -179,6 +189,7 @@ by its text)`; if that text appears more than once, it stops instead of guessing
 
 ```
 iphone-use ui [--find "text"] [--wait]            # lines on screen (@tN<TAB>text or [control]<TAB>cell) + gridded screenshot
+iphone-use ui --icons                             # also name the unrecognized [icon]s (slower; needs macOS 27 + Apple Intelligence)
 iphone-use press @tN [--hold 0.8] [--no-ui]       # tap the line; --hold 0.6 or more is a long press
 iphone-use press @tN --trailing                   # tap the right end of that line's row (when its ⓘ or switch isn't listed)
 iphone-use press @tN --swipe left|right           # short swipe on that row to reveal hidden buttons (Delete etc.)
@@ -366,7 +377,8 @@ iphone-use press @t32          # → confirmation, if the app asks for one
 - `open https://…` opens a **new tab** in Safari. When you're done, close just that tab with
   `key cmd+w` while Safari is in front.
 - Ideally return to the screen you started from (usually the home screen): `home`.
-- The daemon exits after 10 idle minutes. To stop it now: `iphone-use daemon --stop`.
+- The daemon exits after 10 idle minutes. Check it with `iphone-use daemon --status`; stop it now with
+  `iphone-use daemon --stop`.
 
 ## Settings and location are the device's real state
 

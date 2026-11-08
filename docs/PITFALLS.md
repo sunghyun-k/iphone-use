@@ -1042,4 +1042,39 @@ bar shows "3:00 PM Sun Nov 8" (localized), which OCR returns as one line, so it 
 the first line; the VPN badge at the far right, nowhere near the clock, came out as "{} VPN" or
 "() VPN" and stayed too. The filter now also takes a short line in the top 5% of the screen with the
 current time as one of its words, and treats a short line whose letters are "VPN" as a status item
-(still only at the very top or next to the clock, so a Settings row named VPN stays).
+(still only at the very top or next to the clock, so a Settings row named VPN stays). With the Wi-Fi
+glyph and battery beside it the badge read as "{} VPN ⑦ 80)", so the VPN rule allows up to 16
+characters.
+
+Dropping the whole clock line took the "◀ Settings" breadcrumb with it: when another app opened this
+one, the iPad puts the way back in front of the clock, and OCR reads "◀ Settings 3:22 PM Sun Nov 8" as
+one line. A clock line starting with ◀ or < keeps the words before the clock (and before its AM/PM
+marker), with a frame cut by their share of the characters.
+
+## Naming icons
+
+### 57. The on-device model names a cropped icon well and a whole screen badly
+
+`ui --icons` asks the Mac's FoundationModels model (macOS 27 accepts image attachments) about each
+`[icon]` the SF Symbol templates (#52) didn't match.
+
+- **A whole screenshot with "list the controls":** a few seconds, controls that weren't there, most
+  icons missed, switch states guessed. Not usable.
+- **A crop of one icon, "what does this depict?":** about 0.5 s, and names an agent can act on
+  ("paper plane", "download", "heart"). The crop is a square of 1.6× the icon, at least 40 pt: a tight
+  crop of a thin glyph came back as "line".
+- **One session for all icons:** the answers drifted toward the earlier ones. Each icon gets a fresh
+  `LanguageModelSession`.
+
+Names are kept across reads: an `[icon]` that a fresh read finds where a named one was, with the same
+pixels around it (`ScreenCapture.sameArea`), takes the old name, so a plain `ui` after `ui --icons`
+doesn't report every icon as changed. Without the pixel check, a carousel that slid a new picture into
+the same place inherited the old picture's name.
+
+Shape detection also picks out pieces of illustrations (a banner's characters); the model then names
+them for what they are ("cat face"), which at least tells the agent they're artwork. Naming stops at
+16 icons per run (`IconNamer.limit`); a second run names the next ones.
+
+The code is compiled only with Swift 6.4 or later (the macOS 27 SDK, where image attachments exist),
+and FoundationModels is weak-linked, so a build from an older Xcode, or a run on an older macOS, prints
+why `--icons` can't name anything and keeps `[icon]`.

@@ -110,7 +110,7 @@ With more than one device, pass `--udid <UDID or name>` to every command, for ex
 
 | Area | Commands | Notes |
 |---|---|---|
-| Read & act on text | `ui`, `press`, `type`, `home` | OCR text lines and shape-detected controls (switch state, SF Symbol icons) with refs (`@tN`), and a gridded screenshot. After each action it waits for the screen to settle and prints a diff. `press` checks the line is still there before tapping, and also has `--hold`, `--trailing` (row-end ⓘ buttons and toggles) and `--swipe` (reveal swipe actions such as Delete). |
+| Read & act on text | `ui`, `press`, `type`, `home` | OCR text lines and shape-detected controls (switch state, SF Symbol icons) with refs (`@tN`), and a gridded screenshot. `ui --icons` names other icons with the Mac's on-device model (macOS 27, Apple Intelligence). After each action it waits for the screen to settle and prints a diff. `press` checks the line is still there before tapping, and also has `--hold`, `--trailing` (row-end ⓘ buttons and toggles) and `--swipe` (reveal swipe actions such as Delete). |
 | Apps | `apps`, `launch`, `open` | Launch by display name or bundle ID. Open any URL or deep link. |
 | Device settings | `settings`, `location` | Appearance, text size and accessibility toggles; simulated location. These are the same controls as Device Hub's settings panel. |
 | Screen & coordinates | `screenshot`, `wait`, `touch`, `swipe`, `scroll`, `text`, `key`, `button`, `paste`, `clipboard` | For icons and anything without text. Grid cells let you tap by name instead of guessing pixels. `touch`, `swipe` and `scroll` print the new list too. |
