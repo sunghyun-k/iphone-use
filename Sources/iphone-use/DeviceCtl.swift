@@ -1,10 +1,7 @@
 import Foundation
 
-/// `xcrun devicectl` wrapper.
-///
-/// Launching apps, deep links and the installed-app list need no reverse engineering: CoreDevice's
-/// public CLI already does them. We only broke into input and screenshots ourselves;
-/// everything else is delegated here.
+/// `xcrun devicectl` wrapper. Used for the installed-app list when installation_proxy can't be opened
+/// (Wi-Fi, `InstallationProxy`).
 ///
 /// Note: when a path through the CoreDevice media daemon (screenshots etc.) wedges on the device side,
 /// `devicectl` hangs without replying. So every call gets a timeout.

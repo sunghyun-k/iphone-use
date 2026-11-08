@@ -232,8 +232,20 @@ the device through MobileDevice and fails. So we connect directly.
   exactly which field is wrong.
 - **Listing**: we don't use `listapps` on `appservice`. With an empty result it answers right away,
   but **if even one app matches, the action never finishes on the device** (the device log shows
-  "Invoking action" and never "Received reply"). Instead we call the old lockdown
-  `installation_proxy` through the shim (`Browse`, several messages until `Status: Complete`).
+  "Invoking action" and never "Received reply"). Still true on iOS 27.3, which also wants
+  `includeAppGroupIdentifiers`, `includeContainerPaths` and `requireContainerAccess` in the input.
+  Instead we call the old lockdown `installation_proxy` (`Browse`, several messages until
+  `Status: Complete`).
+- **Update (Xcode 27, iOS 27.3):** since service sockets come from CoreDeviceService (#44),
+  `.shim.remote` services can't be opened over Wi-Fi at all: `createservicesocket` fails with
+  `CoreDeviceError 4000` over POSIX `EDEVERR`, although the device advertises the shim (`remotectl
+  show`). `remotectl netcat` can't reach them either. So `apps` and `launch <name>` failed on every
+  Wi-Fi device. Meanwhile `devicectl device info apps` started working over Wi-Fi (about 1.2 s), so
+  it's the fallback (`InstallationProxy.browseDeviceCtl`). Its names are the apps' bundle names
+  ("Settings" on a Korean device), not the localized display names installation_proxy gives
+  ("설정"), and without `--include-all-apps` it lists only developer-built apps. `defaultApp` marks
+  Apple's apps. The shim error mentions "connection", so it's caught; passed on, the daemon would
+  drop its session for nothing.
 - **Recovery**: once this daemon (`dtappserviced`) gets stuck, it accepts every later call and never
   answers. It still replies instantly to input-decoding errors, so it looks alive; don't be fooled.
   If a launch times out, find its pid via Instruments `deviceinfo.runningProcesses`, kill it with

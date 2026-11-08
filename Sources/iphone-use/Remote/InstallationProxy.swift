@@ -1,11 +1,13 @@
 import Foundation
 
-/// Installed app list. Uses lockdown's `com.apple.mobile.installation_proxy` (`LockdownShim`).
+/// Installed app list. Uses lockdown's `com.apple.mobile.installation_proxy` (`LockdownShim`) where it
+/// opens, and `devicectl device info apps` where it doesn't.
 ///
-/// Why not CoreDevice `appservice`'s `listapps`: it only answered when the result was empty, and with
-/// even one app matched it never answered over Wi-Fi. `devicectl device info apps` tries to grab Wi-Fi
-/// devices via MobileDevice and dies with `Failed to allocate RSD device`. installation_proxy dates
-/// back to the lockdown era and answers in the same shape over USB and Wi-Fi.
+/// installation_proxy gives display names in the device's language ("설정" for Settings), which is what
+/// `launch <name>` matches against. Over USB it's started with MobileDevice. Over Wi-Fi its
+/// `.shim.remote` copy can't be opened anymore: CoreDeviceService refuses lockdown shims, so the
+/// fallback to devicectl gives the bundle names instead (English "Settings"). CoreDevice
+/// `appservice`'s `listapps` never answers once an app matches (PITFALLS #20).
 enum InstallationProxy {
     struct App {
         let bundleId: String
@@ -25,7 +27,7 @@ enum InstallationProxy {
             switch self {
             case .service(let detail): return "installation_proxy error: \(detail)"
             case .noSuchApp(let name):
-                return "No app named \"\(name)\". Look it up with `apps --all --filter`."
+                return "No app named \"\(name)\". Look it up with `apps --filter` (over Wi-Fi the names are the apps' own names, often English, e.g. Settings) and launch it by bundle ID."
             case .ambiguous(let name, let apps):
                 let list = apps.prefix(10).map { "  \($0.name)  \($0.bundleId)" }
                 return "More than one app matches \"\(name)\" exactly. Give the full name or the bundle ID:\n"
@@ -63,6 +65,38 @@ enum InstallationProxy {
 
     /// With `includeSystem` false, only user-installed apps.
     static func browse(rsd: RemoteServiceDiscovery, includeSystem: Bool) throws -> [App] {
+        do {
+            return try browseLockdown(rsd: rsd, includeSystem: includeSystem)
+        } catch {
+            // Caught rather than passed on: the shim error says "connection", and the daemon would drop
+            // its healthy session over it (`DaemonCommand`).
+            do {
+                return try browseDeviceCtl(udid: rsd.udid, includeSystem: includeSystem)
+            } catch let fallback {
+                throw Failure.service("\(error); devicectl: \(fallback)")
+            }
+        }
+    }
+
+    /// `devicectl device info apps`. Names are bundle names, not the device's display names, and
+    /// services hidden from the home screen are already left out.
+    static func browseDeviceCtl(udid: String, includeSystem: Bool) throws -> [App] {
+        // Without --include-all-apps only apps built by a developer come back, not ones from the App Store.
+        let json = try DeviceCtl.json(["device", "info", "apps", "--device", udid, "--include-all-apps"])
+        let apps = ((json as? [String: Any])?["result"] as? [String: Any])?["apps"] as? [[String: Any]] ?? []
+        return apps.compactMap { entry in
+            guard let bundle = entry["bundleIdentifier"] as? String else { return nil }
+            // `defaultApp` is Apple's own apps (App Store included); third-party apps are false.
+            let system = entry["defaultApp"] as? Bool ?? false
+            if !includeSystem, system { return nil }
+            let name = (entry["name"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
+            return App(
+                bundleId: bundle, name: name.isEmpty ? bundle : name, type: system ? "System" : "User",
+                hidden: entry["hidden"] as? Bool ?? false)
+        }
+    }
+
+    private static func browseLockdown(rsd: RemoteServiceDiscovery, includeSystem: Bool) throws -> [App] {
         let socket = try LockdownShim.open("com.apple.mobile.installation_proxy", rsd: rsd)
         defer { socket.shutdownAndClose() }
         socket.setReceiveTimeout(20)

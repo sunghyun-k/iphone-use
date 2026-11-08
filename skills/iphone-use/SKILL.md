@@ -187,8 +187,10 @@ iphone-use paste "🙂" [--file f] / clipboard [-o backup.txt]
 
 1. **Deep links and app launch**: `open "prefs:root=General"`, `launch Settings`,
    `launch "App Store"`.
-   - If you don't know the name, use `apps --filter word`. The app name must match the name on the
-     home screen **exactly**, in the device's language.
+   - If you don't know the name, use `apps --filter word`, and launch by the name or bundle ID it
+     shows. The name must match **exactly**. Over USB it's the home screen name in the device's
+     language; over Wi-Fi it's the app's own name, often English (`Settings`, not the translated
+     home screen label), so check with `apps --filter` first.
    - If the app is already running, `launch` brings it forward **on whatever screen it was last on.**
      If you need a specific screen, a deep link is the most reliable way there.
 
