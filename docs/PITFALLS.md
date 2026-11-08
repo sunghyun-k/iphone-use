@@ -782,9 +782,16 @@ What the code does now:
   With the daemon running a `ui` takes about 1 s.
 - Lines are sorted into rows by vertical center (Vision returns them roughly by column, which put a
   row's value after everything on the left).
-- The clock, battery and signal are dropped only when they are short digit-like lines in the top 5%.
-  Cutting the top by height alone also cut the navigation bar title on an iPad, where it sits almost
-  as high as the status bar.
+- Status items (clock, battery, carrier, signal dots) can't be cut by position. Since the foldable
+  iPhone they sit differently per device: a strip along the top on most iPhones and iPads, a floating
+  pill at the right edge on the foldable, where its "9:22" and "80+" (the charging bolt read as "+"
+  or "4") came out as list lines in the middle of the screen. So the clock is found by its value:
+  a line in the top 30% showing this Mac's time (±1 minute, 12- or 24-hour) is the clock, and short
+  digit-like lines within four clock heights of it go too. Without a clock, only short digit-like
+  lines in the top 5% go; cutting the top by height alone also cut the navigation bar title on an
+  iPad, where it sits almost as high as the status bar.
+- `ScreenCapture.signature` still skips the top 6% for settling. On the foldable the clock pill is
+  below that, so a minute tick can cost one extra capture before the screen counts as settled.
 - Keyboard keys are dropped from the top key row down (`TextRecognizer.keysTop`), without the 14%
   allowance `keyboardTop` adds for scrolling: that allowance swallowed the chat input field just
   above the keys.

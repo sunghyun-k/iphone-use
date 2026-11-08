@@ -140,7 +140,7 @@ final class UIScreen {
         if let keys = TextRecognizer.keysTop(in: lines, height: height) {
             lines.removeAll { $0.frame.midY > keys - height * 0.005 }
         }
-        lines.removeAll { isStatusBar($0, height: height) }
+        lines = withoutStatusItems(lines, height: height)
         lines = lines.compactMap { line in
             let text = oneLine(line.text)
             return text.isEmpty ? nil : TextRecognizer.Line(text: text, frame: line.frame)
@@ -148,13 +148,47 @@ final class UIScreen {
         return (readingOrder(lines), keyboard)
     }
 
-    /// The clock, battery and signal at the very top. Only short digit-like lines go: on an iPad the
-    /// navigation bar's title sits almost as high as the status bar, so cutting by height alone loses it.
-    private static func isStatusBar(_ line: TextRecognizer.Line, height: CGFloat) -> Bool {
-        guard line.frame.midY < height * 0.05 else { return false }
-        let text = line.text.trimmingCharacters(in: .whitespaces)
-        if ["5G", "5G+", "5GE", "LTE", "4G", "3G", "SOS"].contains(text.uppercased()) { return true }
-        return !text.isEmpty && text.allSatisfy { $0.isNumber || ":%. ".contains($0) }
+    /// Drops the status items: the clock, battery level, carrier and signal glyphs OCR reads as text.
+    ///
+    /// Where they sit differs by device: a strip along the top on most iPhones and iPads, a floating pill at
+    /// the right on the foldable iPhone, so neither a top band nor a corner can be cut. The clock is found
+    /// by its value instead — the device shows the same time as this Mac — and short digit-like lines
+    /// next to it go with it. Without a clock (misread, or hidden by a full-screen app) only short
+    /// digit-like lines at the very top go: cutting more there loses an iPad's navigation title, which
+    /// sits almost as high as its status bar (PITFALLS #48).
+    static func withoutStatusItems(_ lines: [TextRecognizer.Line], height: CGFloat) -> [TextRecognizer.Line] {
+        let clocks = lines.filter { $0.frame.midY < height * 0.3 && showsClock($0.text) }
+        return lines.filter { line in
+            if clocks.contains(where: { $0.frame == line.frame }) { return false }
+            guard statusLike(line.text) else { return true }
+            if line.frame.midY < height * 0.05 { return false }
+            return !clocks.contains { clock in
+                let reach = clock.frame.height * 4
+                return abs(line.frame.midX - clock.frame.midX) < reach && abs(line.frame.midY - clock.frame.midY) < reach
+            }
+        }
+    }
+
+    /// "9:41" matching this Mac's time within a minute, in 12- or 24-hour form.
+    private static func showsClock(_ text: String) -> Bool {
+        let parts = text.trimmingCharacters(in: .whitespaces).split(separator: ":")
+        guard parts.count == 2, parts[1].count == 2, let hour = Int(parts[0]), let minute = Int(parts[1]) else {
+            return false
+        }
+        let calendar = Calendar.current
+        return [-60.0, 0, 60].contains { offset in
+            let now = calendar.dateComponents([.hour, .minute], from: Date().addingTimeInterval(offset))
+            guard let h = now.hour, let m = now.minute, m == minute else { return false }
+            return hour == h || hour == (h + 11) % 12 + 1
+        }
+    }
+
+    /// Battery ("80%", "80+" for the charging bolt), carrier ("5G", "LTE") or signal dots ("::;").
+    private static func statusLike(_ text: String) -> Bool {
+        let text = text.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty, text.count <= 5 else { return false }
+        if ["5G", "5G+", "5GE", "5G UC", "LTE", "4G", "3G", "SOS"].contains(text.uppercased()) { return true }
+        return text.allSatisfy { $0.isNumber || ":;.,%+ ".contains($0) }
     }
 
     /// Top to bottom, then left to right within a row. Vision returns lines roughly by column, which puts
