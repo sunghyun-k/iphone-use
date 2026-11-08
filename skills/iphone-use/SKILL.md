@@ -103,6 +103,8 @@ iphone-use type @t2 "Battery" # tap the field (here its placeholder text) and ty
     flips the switch.
   - `[chevron left]`, `[plus]`, `[info circle]`, `[checkmark]`, `[magnifyingglass]` …: a common icon,
     named after its SF Symbol. `[chevron left]` near the top is usually the back button.
+  - A round button with a glyph on it (a chat's send arrow on a colored disc) is one line for the
+    whole disc, named after its glyph or `[icon]`.
   - `[icon]`: an icon that wasn't recognized (an app's own artwork). Look at the screenshot to see what
     it is before pressing it, or run `ui --icons` to have the Mac's on-device model name each one:
     `[icon: paper plane]`, `[icon: download]`. That takes about half a second per icon, and the name is
@@ -195,7 +197,7 @@ iphone-use press @tN --trailing                   # tap the right end of that li
 iphone-use press @tN --swipe left|right           # short swipe on that row to reveal hidden buttons (Delete etc.)
 iphone-use type @tN "text" [--enter] [--clear]    # tap the field and type; --clear erases what was there
 iphone-use type "text" [--enter]                  # keep typing into the already focused field
-iphone-use touch --cell G21 [--hold 0.8]          # tap the center of a grid cell (icons that have no line)
+iphone-use touch --cell G21 [--hold 0.8] [--exact]  # tap a grid cell (icons that have no line); snaps to a listed control on its edge
 iphone-use scroll down|up|left|right [--amount 0.5] [--fling]
 iphone-use swipe --from C12 --to C4 [--duration 0.35]
 iphone-use home                                   # to the home screen (no list)
@@ -235,6 +237,7 @@ iphone-use paste "🙂" [--file f] / clipboard [-o backup.txt]
    | Screen | URL |
    |---|---|
    | General / About / Software Update / Storage | `prefs:root=General`, `…General&path=About`, `…&path=SOFTWARE_UPDATE_LINK`, `…&path=STORAGE_MGMT` |
+   | One app's storage page (with Offload App and Delete App) | `…&path=STORAGE_MGMT/<bundle ID>`, e.g. `prefs:root=General&path=STORAGE_MGMT/com.apple.mobilenotes`; bundle IDs from `apps --filter` |
    | Keyboard / Date & Time / Language & Region | `…General&path=Keyboard`, `…&path=DATE_AND_TIME`, `…&path=INTERNATIONAL` |
    | Accessibility / Display & Text Size | `prefs:root=ACCESSIBILITY`, `…ACCESSIBILITY&path=DISPLAY_AND_TEXT` |
    | Wi-Fi / Bluetooth / Battery | `prefs:root=WIFI`, `prefs:root=Bluetooth`, `prefs:root=BATTERY_USAGE` |
@@ -271,8 +274,15 @@ Don't swipe from the left edge to go back: the swipe can land on a list row and 
 - **`type @tN "text"` is the default.** It taps the line (an empty field usually shows placeholder
   text such as `Search`), confirms that the on-screen keyboard appeared, then types. If no keyboard
   appears it doesn't type, because keys typed without focus become app shortcuts (in Music, space
-  started playback). For a field with no text at all, `touch --cell` it, then `type "text"`.
-- Check the result in the field's `changed` line.
+  started playback). **The tap itself still happens**, so a ref that wasn't a field (a list row) opens
+  whatever that row opens. For a field with no text at all, `touch --cell` it, then `type "text"`.
+  Pick the field's own line: the one inside the field's box on the screenshot, usually with a
+  magnifier in front (`Q 검색`, `Q Search`). A `Search` title or row elsewhere is a different control.
+- Settings' search field is behind the magnifier at the bottom right (iOS 26+; listed as
+  `[magnifyingglass]` or, read by OCR, `Q`). A `Search` row in the list is a settings page.
+- Check the result in the field's `changed` line. A search field that fills in often replaces the
+  rest of the screen with results, and then the result is a `New screen` list: find the field's line
+  in it.
 - While the keyboard is up, its keys are left out of the list (`(the on-screen keyboard is up; its keys
   are left out)`). To dismiss it, use `key esc`, or press `Done`/`Cancel`.
 - The tool sends key **positions**, and the device reads them **with its own keyboard layout**. The
@@ -283,7 +293,19 @@ Don't swipe from the left edge to go back: the swipe can land on a list row and 
   | English | Latin letters, digits, symbols | Hangul → Latin letters like `qoxjfl` |
   | Korean (Dubeolsik) | Hangul, digits, symbols | Latin letters → Hangul jamo |
 
-  If the text came out wrong (visible in the `changed` line), retype it with
+- **Hangul also needs the on-screen keyboard to be Korean.** `type` and `text` handle this: if it
+  shows English keys, they switch it to Korean, type, and switch it back, and say
+  `(switched the on-screen keyboard to Korean for the Hangul, then back)`. If the device has no Korean
+  keyboard, they stop before typing and say so.
+- **Some fields read the keys as Latin letters even with a Korean keyboard**: "배터리" comes out as
+  `qoxjfl`. Settings' search does this; a chat app's field may not. After Hangul, `type` checks the
+  screen and prints `Warning: the Hangul did not come out as Hangul — the screen reads "…"`. Then
+  **don't send or submit it**, and don't just retype (it comes out the same). Clear it and get there
+  another way: press the row if it's on screen, or use a deep link or URL (for Settings, the table
+  under "Getting somewhere"), or `paste`.
+- OCR drops the space between Hangul words: a field showing `가 나` reads as `가나`. The space was
+  typed; check the screenshot instead of retyping.
+- If the text came out wrong (visible in the `changed` line), retype it with
   `type @tN "…" --clear`, or find a way that needs no typing:
   1. **Put it in a URL**: `open "https://www.google.com/search?q=wallpaper settings"`.
   2. **Go straight to the target screen with a deep link.**
@@ -339,7 +361,11 @@ iphone-use press @t32          # → confirmation, if the app asks for one
   edges and a bold line every 5 cells. **`touch --cell G21`** taps the middle of that cell; to drag,
   `swipe --from C12 --to C4`.
 - A cell is about 40 pt on every device, roughly a fingertip, so an iPad or an unfolded foldable has
-  more cells than an iPhone. Tapping a cell's center hits a normal button anywhere in it. If the
+  more cells than an iPhone. Tapping a cell's center hits a normal button anywhere in it.
+- **If the cell only partly covers a listed control** (a `[bracketed]` line) and its center misses
+  every control, `touch --cell` taps that control's center and says
+  `Tapped J9 on the center of @t18 [icon], which the cell only partly covers …`. Add `--exact` to tap
+  the cell's own center. If the
   target is small and straddles a cell border, take a finer grid, about twice the columns you see
   (`screenshot -o f.png --grid --grid-size 24 --max-width 800`), and **pass the same `--grid-size`
   when you tap.**

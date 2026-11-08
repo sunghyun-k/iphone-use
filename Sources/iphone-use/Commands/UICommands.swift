@@ -164,9 +164,10 @@ struct TypeCommand: ParsableCommand {
         discussion: """
             iphone-use type @t3 "iphone case" --enter
             iphone-use type @t3 "New Name" --clear
-            If the on-screen keyboard doesn't appear, nothing is typed (it's not a text field). Hangul comes out
-            right when the device input source is Korean, Latin letters when it's English (switch with
-            `key ctrl+space`). Characters not on the keyboard layout, like emoji, can't be typed.
+            If the on-screen keyboard doesn't appear, nothing is typed (it's not a text field). For Hangul, an
+            English on-screen keyboard is switched to Korean first and back afterwards. Latin letters come out
+            right only on a device whose keyboard layout is English. Characters not on the layout, like emoji,
+            can't be typed.
             """
     )
 
@@ -204,7 +205,10 @@ struct TypeCommand: ParsableCommand {
                 let (rect, _) = try screen.locate(try screen.entry(ref))
                 try tap(rect, input: input)
             }
-            guard try keyboardAppears(rsd: screen.rsd, wait: ref != nil) else { throw UIError.noKeyboard }
+            guard let keyboard = try keyboardAppears(rsd: screen.rsd, wait: ref != nil) else { throw UIError.noKeyboard }
+            let hangul = text.contains(where: HangulKeys.isHangul)
+            let switched =
+                hangul ? try KeyboardLanguage.switchToKorean(from: keyboard, hid: input.hid, rsd: screen.rsd) : false
 
             if clear {
                 try input.hid.typeKey(0x04, modifiers: [0xE3])  // ⌘A
@@ -213,28 +217,47 @@ struct TypeCommand: ParsableCommand {
             for (usage, needsShift) in keys {
                 try input.hid.typeKey(usage, modifiers: needsShift ? [0xE1] : [])
             }
+            // Switched back before Return: a Return that sends or searches can take the keyboard away.
+            if switched { try KeyboardLanguage.restore(hid: input.hid, rsd: screen.rsd) }
             if enter { try input.hid.typeKey(0x28, modifiers: []) }
             input.close()
 
             print("Typed\(ref.map { " @t\($0)" } ?? "") ← \"\(text)\"\(enter ? " + Return" : "")")
+            if switched { print(KeyboardLanguage.switchedNote) }
             if noUi { return }
-            screen.printReport(try screen.observeAfterAction())
+            let report = try screen.observeAfterAction()
+            screen.printReport(report)
+            // Every line, not just the changes: a search field that filled in often turns the rest of the
+            // screen into results, which reads as a new screen.
+            if hangul,
+                let wrong = screen.state.entries.map(\.text).first(where: {
+                    KeyboardLanguage.looksUncomposed($0, intended: text)
+                })
+            {
+                print(
+                    """
+                    Warning: the Hangul did not come out as Hangul — the screen reads "\(wrong)". Don't send or \
+                    submit it. Some fields read the keys as Latin letters even with a Korean keyboard (Settings' \
+                    search does), so typing again won't help there: clear it, then use a deep link or a URL, or \
+                    paste (ask the user to allow the paste prompt).
+                    """)
+            }
         }
     }
 
-    /// Is the on-screen keyboard up? If a text field was just pressed, wait a little for the slide-up
-    /// animation.
-    private func keyboardAppears(rsd: RemoteServiceDiscovery, wait: Bool) throws -> Bool {
+    /// The on-screen keyboard's language if it's up (`.some(nil)` when up but unreadable), nil if it isn't.
+    /// If a text field was just pressed, wait a little for the slide-up animation.
+    private func keyboardAppears(rsd: RemoteServiceDiscovery, wait: Bool) throws -> KeyboardLanguage?? {
         for attempt in 0..<(wait ? 6 : 1) {
             if attempt > 0 || wait { Thread.sleep(forTimeInterval: 0.3) }
             let image = try ScreenText.litImage(rsd: rsd)
-            if TextRecognizer.keyboardVisible(
-                in: try TextRecognizer.lines(in: image), height: CGFloat(image.height))
-            {
-                return true
+            let lines = try TextRecognizer.lines(in: image)
+            let height = CGFloat(image.height)
+            if TextRecognizer.keyboardVisible(in: lines, height: height) {
+                return .some(KeyboardLanguage.detect(in: lines, height: height))
             }
         }
-        return false
+        return nil
     }
 }
 

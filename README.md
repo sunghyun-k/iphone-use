@@ -161,8 +161,8 @@ changing code that looks strange; most of it is there for a reason.
 
 - **Keyboard layout is fixed per device.** HID sends key positions, and the device decodes them with
   its own layout, regardless of the input source. `type`/`text` handle ASCII and Hangul (mapped to
-  Dubeolsik keys). Other text goes through `paste`, which makes the device show a paste-permission
-  prompt every time.
+  Dubeolsik keys; Hangul also needs a Korean on-screen keyboard, which they switch to and back). Other
+  text goes through `paste`, which makes the device show a paste-permission prompt every time.
 - `ui` lists only text. Icons, toggle states and images are in the saved screenshot; tap them with
   `touch --cell`.
 - OCR reads Korean and English. Other scripts may come out garbled.

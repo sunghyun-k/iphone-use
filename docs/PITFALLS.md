@@ -1078,3 +1078,58 @@ them for what they are ("cat face"), which at least tells the agent they're artw
 The code is compiled only with Swift 6.4 or later (the macOS 27 SDK, where image attachments exist),
 and FoundationModels is weak-linked, so a build from an older Xcode, or a run on an older macOS, prints
 why `--icons` can't name anything and keeps `[icon]`.
+
+### 58. Hangul composes only while the on-screen keyboard is Korean
+
+#11 holds: the HID layout is fixed per device. But on an iPhone whose layout is Dubeolsik, the
+**on-screen** keyboard's language still decides whether the keys compose. With it on English, `type`
+of "언제와" left the loose jamo `ㅇㅓㄴㅈㅔㅇㅗㅏ` in a chat's input field, and the next step would have
+been the send button. With it on Korean, the same keys composed correctly.
+
+`type` and `text` now read the keyboard's language off its key labels (`KeyboardLanguage.detect`:
+single jamo vs single Latin letters below the top key row). For text with Hangul on a Latin keyboard
+they press `ctrl+space` until the keys turn to jamo (at most 4 tries), type, and press it again until
+they're Latin, **before** Return: a Return that sends or searches can take the keyboard away, and then
+it can't be switched back. With several Latin keyboards, the switch back stops at the first one.
+When it can't tell (the number or emoji pad), it types as is.
+
+**It also depends on the app.** On the same iPhone, minutes apart, the same Dubeolsik keys composed
+"배터리" in a chat app's search field but came out as `qoxjfl` in Settings' search, with the Korean
+keyboard showing in both. So "the layout is fixed per device" (#11) is per field at least; nothing we
+send changes it, and typing again gives the same letters.
+
+`type` therefore reads the screen afterwards (every line, not just the changes: a search field that
+fills in turns the screen into results, which reads as a new screen). Three loose jamo in a row, or the
+Dubeolsik keys as Latin letters, print a warning not to send it and to use a deep link, a URL or
+`paste` instead. OCR misreads the last letter often enough (`qoxjf°`) that five or more keys match with
+one missing; shorter ones must match whole, because every line on the screen is checked.
+
+`ctrl+space` also shows an input-source picker over the keyboard for about a second and a half. The
+keys switch at once and typing goes to the field, so `type` doesn't wait for the picker to fade.
+
+OCR drops the space between Hangul words ("가 나" reads as "가나"). The space is typed; look at the
+screenshot before retyping.
+
+### 59. A round button with a glyph on it was missing from the list
+
+A chat's send button (a black arrow on a yellow disc, about 33 pt on the iPhone) never got a line, so
+the agent tapped a grid cell for it; the cell's center fell just off the disc and nothing happened.
+Two causes in `ScreenElements`' blob path:
+
+- A disc under 44 pt is a single blob of two colors (fill and glyph), and the one-color check (#52)
+  throws it out.
+- A disc touching a larger shape (the input bar it sits in) joins that shape's blob, which is too big to
+  look into. Two captures of the same screen differed in this: the colors after conversion moved a few
+  edge pixels between regions.
+
+`discButtons` works on the flat-color regions instead: a region 16–64 pt across, as wide as high,
+covering 0.5–0.86 of its box, with points at 0.1 from each corner outside it (a rounded square, like a
+Settings icon or an app icon, fills those) and points just inside each edge in it, and a glyph inside.
+Fill is judged by color (within 24 per channel), not region id, because a slight gradient splits one
+fill into several regions. The disc is the listed frame; the glyph is what the one-color check and the
+symbol matcher look at. Blob pieces inside a disc are dropped, so it isn't listed twice. Settings,
+General, Calculator and the home screen list the same controls as before.
+
+`touch --cell` also snaps now: when the cell overlaps exactly one bracketed control (at least 20% of
+it) without its center being on any control, it taps that control's center and says so. `--exact`
+taps the cell's center.

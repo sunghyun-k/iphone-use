@@ -130,6 +130,25 @@ struct TouchCommand: ParsableCommand {
         help: "If you read the coordinates off an image downscaled to this width, that width. Converted to device pixels.")
     var imageWidth: Double?
 
+    @Flag(name: .long, help: "With --cell, tap the cell's center even when a listed control sits on its edge.")
+    var exact = false
+
+    /// The one bracketed control (`[icon]`, `[toggle on] …`) from the last list that `cell` overlaps
+    /// without covering its center: the cell was meant for it. A round send button sitting on a cell
+    /// border was missed by the cell's center, and nothing happened (PITFALLS #59). Text lines aren't
+    /// snapped to (`press` taps those), and the cell's own center wins when a control already covers it.
+    static func control(partlyIn cell: CGRect, state: UIState, screen: CGSize) -> UIState.Entry? {
+        guard Double(state.width) == screen.width, Double(state.height) == screen.height else { return nil }
+        let center = CGPoint(x: cell.midX, y: cell.midY)
+        let controls = state.entries.filter { $0.text.hasPrefix("[") }
+        if controls.contains(where: { $0.frame.contains(center) }) { return nil }
+        let partly = controls.filter { entry in
+            let overlap = entry.frame.intersection(cell)
+            return !overlap.isNull && overlap.width * overlap.height >= 0.2 * entry.frame.width * entry.frame.height
+        }
+        return partly.count == 1 ? partly[0] : nil
+    }
+
     func validate() throws {
         switch (x, y, cell) {
         case (.some, .some, nil), (nil, nil, .some): return
@@ -142,22 +161,33 @@ struct TouchCommand: ParsableCommand {
         defer { session.close() }
 
         let (x, y): (Double, Double)
+        var snappedTo: UIState.Entry?
         if let cell {
             let layout = ScreenGrid(
                 width: session.screen.width, height: session.screen.height,
                 pointScale: session.screen.pointScale, density: gridSize)
             let rect = try layout.rect(named: cell)
             (x, y) = (rect.midX, rect.midY)
+            if !exact, let udid = try? DeviceResolver.udid(for: device.udid) {
+                snappedTo = Self.control(
+                    partlyIn: rect, state: UIState.load(udid: udid),
+                    screen: CGSize(width: session.screen.width, height: session.screen.height))
+            }
         } else {
             (x, y) = session.devicePoint(self.x!, self.y!, imageWidth: imageWidth)
         }
-        let point = session.normalized(x, y)
+        let target = snappedTo.map { (Double($0.frame.midX), Double($0.frame.midY)) } ?? (x, y)
+        let point = session.normalized(target.0, target.1)
         if hold >= 0.4 {
             try session.hid.press(x: point.x, y: point.y, duration: hold)
         } else {
             try session.hid.tap(x: point.x, y: point.y, hold: hold)
         }
-        print("Tapped \(cell.map { "\($0.uppercased()) " } ?? "")(\(Int(x)), \(Int(y)))")
+        if let snappedTo, let cell {
+            print("Tapped \(cell.uppercased()) on the center of @t\(snappedTo.ref) \(snappedTo.text), which the cell only partly covers (\(Int(target.0)), \(Int(target.1))). For the cell's own center, add --exact")
+        } else {
+            print("Tapped \(cell.map { "\($0.uppercased()) " } ?? "")(\(Int(x)), \(Int(y)))")
+        }
         try shot.capture(after: session, udid: device.udid)
         if !noUi { UIScreen.report(afterActionOn: device.udid) }
     }
@@ -398,8 +428,9 @@ struct TextCommand: ParsableCommand {
         commandName: "text",
         abstract: "Type text into the focused field (ASCII, Hangul).",
         discussion: """
-            Hangul comes out right when the device input source is Korean; Latin letters when it is English.
-            `key ctrl+space` cycles the input source. Check with a screenshot after typing.
+            For Hangul, an English on-screen keyboard is switched to Korean first and back afterwards (not with
+            --force). Latin letters come out right only on a device whose keyboard layout is English. Check with
+            a screenshot after typing.
             """
     )
 
@@ -497,9 +528,11 @@ struct TextCommand: ParsableCommand {
         // Without focus in a field, keys are eaten as the app's keyboard shortcuts. In Music, after tapping
         // only the Search tab and not the field, typing an artist name had the space start playback and
         // the letters flip to unrelated screens. Check focus by whether the on-screen keyboard is up (~0.5 s).
+        var switched = false
         if !force {
             let image = try ScreenText.litImage(rsd: session.rsd)
-            guard TextRecognizer.keyboardVisible(in: try TextRecognizer.lines(in: image), height: CGFloat(image.height))
+            let lines = try TextRecognizer.lines(in: image)
+            guard TextRecognizer.keyboardVisible(in: lines, height: CGFloat(image.height))
             else {
                 throw InputFailure.noFocus(
                     """
@@ -508,12 +541,23 @@ struct TextCommand: ParsableCommand {
                     (space = play in Music). If a physical keyboard is hiding the on-screen keyboard, use --force.
                     """)
             }
+            if text.contains(where: HangulKeys.isHangul) {
+                switched = try KeyboardLanguage.switchToKorean(
+                    from: KeyboardLanguage.detect(in: lines, height: CGFloat(image.height)),
+                    hid: session.hid, rsd: session.rsd)
+            }
         }
 
-        for (usage, needsShift) in keys {
+        var body = keys
+        if enter { body.removeLast() }
+        for (usage, needsShift) in body {
             try session.hid.typeKey(usage, modifiers: needsShift ? [0xE1] : [])
         }
+        // Switched back before Return: a Return that sends or searches can take the keyboard away.
+        if switched { try KeyboardLanguage.restore(hid: session.hid, rsd: session.rsd) }
+        if enter { try session.hid.typeKey(0x28, modifiers: []) }
         print(keys.count == text.count ? "Typed \(text.count) chars" : "Typed \(text.count) chars (\(keys.count) keystrokes)")
+        if switched { print(KeyboardLanguage.switchedNote) }
         try shot.capture(after: session, udid: device.udid)
     }
 }
@@ -521,10 +565,11 @@ struct TextCommand: ParsableCommand {
 /// Blocked by the pre-input check. Throwing `ValidationError` would also print the usage and bury the message.
 enum InputFailure: Error, CustomStringConvertible {
     case noFocus(String)
+    case noKorean(String)
 
     var description: String {
         switch self {
-        case .noFocus(let message): return message
+        case .noFocus(let message), .noKorean(let message): return message
         }
     }
 }

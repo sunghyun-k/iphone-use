@@ -38,7 +38,7 @@ enum ScreenElements {
         }
 
         let textInPoints = text.map { CGRect(x: $0.frame.minX / px, y: $0.frame.minY / px, width: $0.frame.width / px, height: $0.frame.height / px) }
-        for group in map.iconGroups(skipping: textInPoints) {
+        for (group, glyph) in map.iconGroups(skipping: textInPoints) {
             let frame = group.scaled(px)
             if taken.contains(where: { $0.insetBy(dx: -px * 3, dy: -px * 3).contains(frame) }) { continue }
             let overlapsText = text.contains { line in
@@ -54,7 +54,7 @@ enum ScreenElements {
                     && abs(line.frame.midY - frame.midY) < frame.height * 0.7
             }
             if leading { continue }
-            guard let ink = Ink(image, frame.insetBy(dx: -px, dy: -px)), ink.oneColor else { continue }
+            guard let ink = Ink(image, glyph.scaled(px).insetBy(dx: -px, dy: -px)), ink.oneColor else { continue }
             found.append(.init(text: "[\(Symbols.name(for: ink) ?? "icon")]", frame: frame))
         }
         return found
@@ -218,7 +218,10 @@ private struct RegionMap {
     /// into: the fill is its background, and the glyph comes out on its own.
     /// Pieces mostly inside a `text` rect (points) are letters, left out before merging: there are hundreds
     /// of them, and merging is quadratic.
-    func iconGroups(skipping text: [CGRect]) -> [CGRect] {
+    /// Each group comes with the rect its glyph is judged by: the group itself, or for a filled disc
+    /// (`discButtons`), the glyph on it, while the disc is what's listed and tapped.
+    func iconGroups(skipping text: [CGRect]) -> [(frame: CGRect, glyph: CGRect)] {
+        let discs = discButtons()
         var pieces: [CGRect] = []
         for blob in blobs {
             // A thin outline around something bigger (a round button's rim) would be merged with the
@@ -242,6 +245,8 @@ private struct RegionMap {
         }
         pieces = pieces.filter { piece in
             guard piece.width >= 6 || piece.height >= 6 else { return false }
+            // A disc button or its glyph: the disc stands for both.
+            if discs.contains(where: { $0.frame.insetBy(dx: -2, dy: -2).contains(piece) }) { return false }
             return !text.contains { t in
                 let i = t.intersection(piece)
                 return !i.isNull && i.width * i.height > 0.5 * piece.width * piece.height
@@ -265,7 +270,70 @@ private struct RegionMap {
         return pieces.filter { r in
             let aspect = r.width / r.height
             return r.width >= 8 && r.height >= 8 && aspect > 0.3 && aspect < 3.5
+        }.map { ($0, $0) } + discs
+    }
+
+    /// Round buttons filled with one color and a glyph on them, like a chat's send button (a black arrow on
+    /// a yellow disc), found from the flat-color regions rather than the blobs.
+    ///
+    /// Blobs missed them two ways (PITFALLS #59). A small disc is one blob of two colors, which the
+    /// one-color check throws out. And a disc touching a bigger shape (the input bar it sits in) joins
+    /// that shape's blob, which is too big to look into; whether it touched changed between two captures
+    /// of the same screen. The fill region itself doesn't depend on either.
+    ///
+    /// Only discs: a rounded square (a Settings row's colored icon) would put its glyph next to every row
+    /// label, and an app icon is one. Told apart by the corners: a disc leaves them empty, a rounded square
+    /// fills them.
+    func discButtons() -> [(frame: CGRect, glyph: CGRect)] {
+        let n = regionSize.count
+        var minX = [Int](repeating: Int.max, count: n), minY = minX
+        var maxX = [Int](repeating: -1, count: n), maxY = maxX
+        for y in 0..<h {
+            for x in 0..<w {
+                let id = Int(region[y * w + x])
+                if x < minX[id] { minX[id] = x }
+                if x > maxX[id] { maxX[id] = x }
+                if y < minY[id] { minY[id] = y }
+                if y > maxY[id] { maxY[id] = y }
+            }
         }
+        var found: [(frame: CGRect, glyph: CGRect)] = []
+        for id in 0..<n where regionSize[id] >= 120 {
+            let bw = maxX[id] - minX[id] + 1, bh = maxY[id] - minY[id] + 1
+            guard (16...64).contains(bw), (16...64).contains(bh) else { continue }
+            let aspect = Double(bw) / Double(bh)
+            let cover = Double(regionSize[id]) / Double(bw * bh)
+            // A full disc covers π/4 ≈ 0.785 of its box; its glyph takes some of that.
+            guard aspect > 0.85, aspect < 1.18, cover > 0.5, cover < 0.86 else { continue }
+            // By color, not region id: a slight gradient splits one fill into a few regions.
+            let fill = color(minY[id] * w + (0..<w).first(where: { Int(region[minY[id] * w + $0]) == id })!)
+            func isFill(_ i: Int) -> Bool { Self.near(color(i), fill, 24) }
+            func inFill(_ fx: Double, _ fy: Double) -> Bool {
+                let x = minX[id] + Int((fx * Double(bw - 1)).rounded()), y = minY[id] + Int((fy * Double(bh - 1)).rounded())
+                return isFill(y * w + x)
+            }
+            // A disc's edge passes 0.15 of the size from its box's corner; a rounded square's (corner radius about
+            // 0.22) passes 0.06 from it.
+            let corners = [(0.1, 0.1), (0.9, 0.1), (0.1, 0.9), (0.9, 0.9)]
+            let rims = [(0.5, 0.06), (0.5, 0.94), (0.06, 0.5), (0.94, 0.5)]
+            guard !corners.contains(where: inFill), rims.allSatisfy(inFill) else { continue }
+            // The glyph: what isn't fill well inside the rim.
+            let cx = Double(minX[id] + maxX[id]) / 2, cy = Double(minY[id] + maxY[id]) / 2
+            let r = Double(min(bw, bh)) / 2 * 0.8
+            var gx0 = Int.max, gy0 = Int.max, gx1 = -1, gy1 = -1, count = 0
+            for y in minY[id]...maxY[id] {
+                for x in minX[id]...maxX[id] where !isFill(y * w + x) {
+                    guard hypot(Double(x) - cx, Double(y) - cy) < r else { continue }
+                    count += 1
+                    gx0 = min(gx0, x); gx1 = max(gx1, x); gy0 = min(gy0, y); gy1 = max(gy1, y)
+                }
+            }
+            guard count >= 8 else { continue }
+            let glyph = CGRect(x: gx0, y: gy0, width: gx1 - gx0 + 1, height: gy1 - gy0 + 1)
+            guard glyph.width <= Double(bw) * 0.8, glyph.height <= Double(bh) * 0.8 else { continue }
+            found.append((CGRect(x: minX[id], y: minY[id], width: bw, height: bh), glyph))
+        }
+        return found
     }
 }
 
