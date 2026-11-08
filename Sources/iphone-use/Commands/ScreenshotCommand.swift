@@ -40,8 +40,8 @@ struct ScreenshotCommand: ParsableCommand {
     @Flag(name: .long, help: "Draw a grid with each cell named (A1, C12, ...). To tap one: touch --cell C12.")
     var grid = false
 
-    @Option(name: .long, help: "Grid: how many cells along the screen's short side. Pass the same value to touch --cell.")
-    var gridSize = ScreenGrid.defaultDensity
+    @Option(name: .long, help: "Grid: how many cells along the screen's short side (default: cells of about 40 pt). Pass the same value to touch --cell.")
+    var gridSize: Int?
 
     func run() throws {
         let rsd = try SessionPool.rsd(udid: device.udid)
@@ -57,10 +57,11 @@ struct ScreenshotCommand: ParsableCommand {
                 base = try ScreenCapture.resize(decoded, width: maxWidth, height: height)
             }
             let layout = ScreenGrid(
-                width: Double(decoded.width), height: Double(decoded.height), density: gridSize)
+                width: Double(decoded.width), height: Double(decoded.height),
+                pointScale: (try? ScreenSize.query(rsd: rsd))?.pointScale, density: gridSize)
             let (image, _) = try ScreenCapture.encode(
                 try layout.draw(on: base), as: format.contentType, quality: quality)
-            let size = gridSize == ScreenGrid.defaultDensity ? "" : " --grid-size \(gridSize)"
+            let size = gridSize.map { " --grid-size \($0)" } ?? ""
             try emit(image, note: "\(layout.summary) — to tap a cell's center: touch --cell C12\(size)")
         } else {
             let (image, note) =

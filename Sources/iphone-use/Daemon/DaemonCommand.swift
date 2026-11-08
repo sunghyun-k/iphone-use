@@ -66,8 +66,10 @@ struct DaemonCommand: ParsableCommand {
             attributes: [.posixPermissions: 0o700])
 
         // A leftover dead socket file makes bind fail with EADDRINUSE.
+        // Agents start one at the beginning of every task; a second start isn't a mistake to fail on.
         if DaemonClient.send(["__ping__"], socketPath: socket) != nil {
-            throw ValidationError("A daemon is already running: \(socket)")
+            print("A daemon is already running; commands use it. Nothing to do.")
+            return
         }
         unlink(socket)
 

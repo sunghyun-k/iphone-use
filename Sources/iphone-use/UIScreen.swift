@@ -1,7 +1,8 @@
 import CoreGraphics
 import Foundation
 
-/// The text lines read off the last screenshot, with refs (`@tN`), kept between commands.
+/// The lines read off the last screenshot, with refs (`@tN`), kept between commands: OCR text, and
+/// controls without text found by their shape (`[toggle on] Wi-Fi`, see `ScreenElements`).
 ///
 /// Refs stay the same while it's the same screen: after an action, a line with the same text near the
 /// same place keeps its ref, new lines get new refs. When most lines differ, it's a new screen and
@@ -33,6 +34,9 @@ struct UIState: Codable {
     var entries: [Entry] = []
     var keyboard = false
     var nextRef = 1
+    /// Pixels per point for screens of `scaleSize` (`[width, height]`), so it's asked once, not per read.
+    var scale: Int?
+    var scaleSize: [Int]?
 
     init(udid: String) { self.udid = udid }
 
@@ -132,17 +136,30 @@ final class UIScreen {
 
     // MARK: - Reading
 
-    /// The text lines of a screenshot in reading order, without the status bar and the keyboard keys.
-    static func read(_ image: CGImage) throws -> (lines: [TextRecognizer.Line], keyboard: Bool) {
+    /// The text lines of a screenshot in reading order, without the status bar and the keyboard keys, with
+    /// the controls that have no text (`[toggle on] Wi-Fi`, `[chevron left]`) in among them.
+    static func read(_ image: CGImage, scale: Int) throws -> (lines: [TextRecognizer.Line], keyboard: Bool) {
         let height = CGFloat(image.height)
         var lines = try TextRecognizer.lines(in: image)
         let keyboard = TextRecognizer.keyboardVisible(in: lines, height: height)
+        // Found against all the text, so glyphs OCR already read (status items included) aren't repeated.
+        var controls = ScreenElements.find(in: image, text: lines, scale: scale)
         if let keys = TextRecognizer.keysTop(in: lines, height: height) {
             lines.removeAll { $0.frame.midY > keys - height * 0.005 }
+            controls.removeAll { $0.frame.midY > keys - height * 0.005 }
         }
-        lines = withoutStatusItems(lines, height: height)
+        // Status glyphs (battery, signal, focus moon) sit around the clock, or in the strip along the top.
+        let clocks = statusClocks(lines, height: height)
+        controls.removeAll { control in
+            control.frame.midY < height * 0.032 || clocks.contains { near(control.frame, $0) }
+        }
+        lines = withoutStatusItems(lines, height: height) + controls
         lines = lines.compactMap { line in
-            let text = oneLine(line.text)
+            var text = oneLine(line.text)
+            // A lone chevron OCR read as "<" is the same control the shape matcher calls [chevron left];
+            // one name for it, so an agent looking for the back button finds it either way.
+            if ["<", "‹"].contains(text) { text = "[chevron left]" }
+            if [">", "›"].contains(text) { text = "[chevron right]" }
             return text.isEmpty ? nil : TextRecognizer.Line(text: text, frame: line.frame)
         }
         return (readingOrder(lines), keyboard)
@@ -157,16 +174,24 @@ final class UIScreen {
     /// digit-like lines at the very top go: cutting more there loses an iPad's navigation title, which
     /// sits almost as high as its status bar (PITFALLS #48).
     static func withoutStatusItems(_ lines: [TextRecognizer.Line], height: CGFloat) -> [TextRecognizer.Line] {
-        let clocks = lines.filter { $0.frame.midY < height * 0.3 && showsClock($0.text) }
+        let clocks = statusClocks(lines, height: height)
         return lines.filter { line in
-            if clocks.contains(where: { $0.frame == line.frame }) { return false }
+            if clocks.contains(line.frame) { return false }
             guard statusLike(line.text) else { return true }
             if line.frame.midY < height * 0.05 { return false }
-            return !clocks.contains { clock in
-                let reach = clock.frame.height * 4
-                return abs(line.frame.midX - clock.frame.midX) < reach && abs(line.frame.midY - clock.frame.midY) < reach
-            }
+            return !clocks.contains { near(line.frame, $0) }
         }
+    }
+
+    /// Where the status clock is (one, or none if it's hidden or misread).
+    private static func statusClocks(_ lines: [TextRecognizer.Line], height: CGFloat) -> [CGRect] {
+        lines.filter { $0.frame.midY < height * 0.3 && showsClock($0.text) }.map(\.frame)
+    }
+
+    /// Within four clock-heights of the clock: the rest of the status items.
+    private static func near(_ rect: CGRect, _ clock: CGRect) -> Bool {
+        let reach = clock.height * 4
+        return abs(rect.midX - clock.midX) < reach && abs(rect.midY - clock.midY) < reach
     }
 
     /// "9:41" matching this Mac's time within a minute, in 12- or 24-hour form.
@@ -246,18 +271,30 @@ final class UIScreen {
         return try observe(settle.image)
     }
 
+    /// Pixels per point of the panel `image` came from, which `ScreenElements` sizes controls by. Kept with
+    /// the list while the screen size stays (unfolding the foldable or turning an iPad changes it).
+    private func pointScale(for image: CGImage) -> Int {
+        let size = [image.width, image.height]
+        if state.scaleSize == size, let scale = state.scale { return scale }
+        let scale = (try? ScreenSize.query(rsd: rsd).pointScale).flatMap { $0 }.map { Int($0.rounded()) }
+            ?? ScreenElements.guessScale(width: image.width, height: image.height)
+        state.scale = scale
+        state.scaleSize = size
+        return scale
+    }
+
     // MARK: - Comparing
 
     enum Report {
         case newScreen
         case sameScreen(
             changed: [(ref: Int, before: String, after: String)], added: [UIState.Entry],
-            removed: [UIState.Entry], unchanged: Int)
+            removed: [UIState.Entry], moved: [(ref: Int, was: CGRect)], unchanged: Int)
     }
 
     /// Reads `image`, matches it against the stored list, stores the result and saves the screenshot.
     func observe(_ image: CGImage) throws -> Report {
-        let (lines, keyboard) = try Self.read(image)
+        let (lines, keyboard) = try Self.read(image, scale: pointScale(for: image))
         try saveImage(image)
         let old = state
         let sameSize = old.width == image.width && old.height == image.height
@@ -270,6 +307,7 @@ final class UIScreen {
         let height = Double(image.height)
         var refs = [Int?](repeating: nil, count: lines.count)
         var used = Set<Int>()
+        var moved: [(ref: Int, was: CGRect)] = []
         // Same text near the same place, then same text anywhere (the list moved).
         for pass in 0..<2 {
             for (index, line) in lines.enumerated() where refs[index] == nil {
@@ -278,9 +316,17 @@ final class UIScreen {
                 guard let near, pass == 1 || distance(near.element.frame, line.frame) < height * 0.03 else { continue }
                 refs[index] = near.element.ref
                 used.insert(near.offset)
+                if pass == 1 { moved.append((near.element.ref, near.element.frame)) }
             }
         }
-        let unchanged = refs.compactMap { $0 }.count
+        var unchanged = refs.compactMap { $0 }.count
+        // A few lines that moved while the rest stayed are news: a check mark that went to another row. When
+        // many moved, the list scrolled, and listing every line would bury what changed.
+        if moved.count * 4 <= unchanged - moved.count {
+            unchanged -= moved.count
+        } else {
+            moved = []
+        }
         // Different text in the same place: a field's contents, a value that changed.
         var changed: [(ref: Int, before: String, after: String)] = []
         for (index, line) in lines.enumerated() where refs[index] == nil {
@@ -308,7 +354,7 @@ final class UIScreen {
         }
         state.nextRef = nextRef
         let removed = old.entries.enumerated().filter { !used.contains($0.offset) }.map(\.element)
-        return .sameScreen(changed: changed, added: added, removed: removed, unchanged: unchanged)
+        return .sameScreen(changed: changed, added: added, removed: removed, moved: moved, unchanged: unchanged)
     }
 
     private func reset(_ lines: [TextRecognizer.Line], _ image: CGImage) -> Report {
@@ -330,7 +376,7 @@ final class UIScreen {
         let width = min(Self.imageWidth, image.width)
         let height = Int((Double(image.height) * Double(width) / Double(image.width)).rounded())
         let base = width == image.width ? image : try ScreenCapture.resize(image, width: width, height: height)
-        let grid = ScreenGrid(width: Double(image.width), height: Double(image.height))
+        let grid = ScreenGrid(width: Double(image.width), height: Double(image.height), pointScale: state.scale.map(Double.init))
         let (data, _) = try ScreenCapture.encode(try grid.draw(on: base))
         let url = UIState.imageURL(udid: udid)
         try FileManager.default.createDirectory(
@@ -359,7 +405,7 @@ final class UIScreen {
         {
             return (entry.frame, false)
         }
-        let matches = try Self.read(image).lines.filter { $0.text == entry.text }
+        let matches = try Self.read(image, scale: pointScale(for: image)).lines.filter { $0.text == entry.text }
         guard matches.count == 1, let line = matches.first else { throw UIError.stale(entry.text) }
         return (line.frame, true)
     }
@@ -373,17 +419,19 @@ final class UIScreen {
     }
 
     /// The grid cell under a line's center, as named on the saved screenshot.
-    func cell(_ entry: UIState.Entry) -> String {
-        let grid = ScreenGrid(width: Double(state.width), height: Double(state.height))
-        let column = min(grid.columns - 1, Int(entry.frame.midX / grid.cell))
-        let row = min(grid.rows - 1, Int(entry.frame.midY / grid.cell))
+    func cell(_ entry: UIState.Entry) -> String { cell(entry.frame) }
+
+    func cell(_ rect: CGRect) -> String {
+        let grid = ScreenGrid(width: Double(state.width), height: Double(state.height), pointScale: state.scale.map(Double.init))
+        let column = min(grid.columns - 1, max(0, Int(rect.midX / grid.cell)))
+        let row = min(grid.rows - 1, max(0, Int(rect.midY / grid.cell)))
         return grid.name(column: column, row: row)
     }
 
     func line(_ entry: UIState.Entry) -> String { "@t\(entry.ref)\t\(entry.text)\t\(cell(entry))" }
 
     var imageNote: String {
-        "Screenshot: \(UIState.imageURL(udid: udid).path) (grid cells as in the third column; icons without text: touch --cell)"
+        "Screenshot: \(UIState.imageURL(udid: udid).path) (grid cells as in the third column; [bracketed] lines are controls found by their shape — check the image when it matters)"
     }
 
     func printList(_ entries: [UIState.Entry]) {
@@ -399,15 +447,16 @@ final class UIScreen {
         }
         switch report {
         case .newScreen:
-            print("New screen — \(state.entries.count) text lines")
+            print("New screen — \(state.entries.count) lines")
             printList(state.entries)
-        case .sameScreen(let changed, let added, let removed, let unchanged):
-            if changed.isEmpty, added.isEmpty, removed.isEmpty {
-                print("Same screen — no text changed (\(unchanged) unchanged). Check the screenshot: a toggle or an icon may have changed; if nothing reacted, pick a different target.")
+        case .sameScreen(let changed, let added, let removed, let moved, let unchanged):
+            if changed.isEmpty, added.isEmpty, removed.isEmpty, moved.isEmpty {
+                print("Same screen — no line changed (\(unchanged) unchanged). Check the screenshot: something without a line (an image, a color) may have changed; if nothing reacted, pick a different target.")
                 print(imageNote)
                 return
             }
-            print("Same screen — changed \(changed.count), added \(added.count), removed \(removed.count), unchanged \(unchanged)")
+            let movedCount = moved.isEmpty ? "" : ", moved \(moved.count)"
+            print("Same screen — changed \(changed.count), added \(added.count), removed \(removed.count)\(movedCount), unchanged \(unchanged)")
             for item in changed {
                 if let entry = state.entries.first(where: { $0.ref == item.ref }) {
                     print("changed\t\(line(entry))\t(was: \(item.before))")
@@ -415,6 +464,11 @@ final class UIScreen {
             }
             for entry in added { print("added\t\(line(entry))") }
             for entry in removed { print("removed\t@t\(entry.ref)\t\(entry.text)") }
+            for item in moved {
+                if let entry = state.entries.first(where: { $0.ref == item.ref }) {
+                    print("moved\t\(line(entry))\t(was: \(cell(item.was)))")
+                }
+            }
             if state.keyboard { print("(the on-screen keyboard is up; its keys are left out)") }
             print(imageNote)
         }

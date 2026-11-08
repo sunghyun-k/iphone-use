@@ -99,6 +99,8 @@ struct ScreenSize {
     /// The HID surface list would say so directly, but asking for it stalls HID input for minutes
     /// (PITFALLS #15), so the order is assumed (PITFALLS #51).
     var touchSurface = HIDService.mainTouchscreen
+    /// Pixels per point (`pointScale`): 3 on iPhones, 2 on iPads. nil if not reported.
+    var pointScale: Double?
 
     /// Asks the device for the size of the panel that is lit now.
     ///
@@ -130,6 +132,11 @@ struct ScreenSize {
                 ? ScreenSize(width: width, height: height) : ScreenSize(width: height, height: width)
             screen.rotation = "rot\((current + native) % 4 * 90)"
             screen.displayID = entry["uniqueId"]?.stringValue
+            if case .double(let scale) = entry["pointScale"] {
+                screen.pointScale = scale
+            } else if let scale = entry["pointScale"]?.intValue {
+                screen.pointScale = Double(scale)
+            }
             screen.touchSurface = HIDService.mainTouchscreen + UInt64(panels.count)
             panels.append((screen, entry["active"]?.boolValue ?? false))
         }

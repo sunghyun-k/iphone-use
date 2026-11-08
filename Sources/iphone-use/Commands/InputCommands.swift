@@ -119,8 +119,8 @@ struct TouchCommand: ParsableCommand {
     @Option(name: .long, help: "Cell name from screenshot --grid (C12). Taps the center of that cell.")
     var cell: String?
 
-    @Option(name: .long, help: "Grid density. Must match screenshot --grid-size.")
-    var gridSize = ScreenGrid.defaultDensity
+    @Option(name: .long, help: "Grid density, if the screenshot was taken with --grid-size. Must match it.")
+    var gridSize: Int?
 
     @Option(name: .long, help: "Hold time (seconds). 0.6 or more for a long press.")
     var hold: Double = 0.08
@@ -143,7 +143,9 @@ struct TouchCommand: ParsableCommand {
 
         let (x, y): (Double, Double)
         if let cell {
-            let layout = ScreenGrid(width: session.screen.width, height: session.screen.height, density: gridSize)
+            let layout = ScreenGrid(
+                width: session.screen.width, height: session.screen.height,
+                pointScale: session.screen.pointScale, density: gridSize)
             let rect = try layout.rect(named: cell)
             (x, y) = (rect.midX, rect.midY)
         } else {
@@ -189,8 +191,8 @@ struct SwipeCommand: ParsableCommand {
     @Option(name: .long, help: "End cell (C4).")
     var to: String?
 
-    @Option(name: .long, help: "Grid density. Must match screenshot --grid-size.")
-    var gridSize = ScreenGrid.defaultDensity
+    @Option(name: .long, help: "Grid density, if the screenshot was taken with --grid-size. Must match it.")
+    var gridSize: Int?
 
     @Option(name: .long, help: "Gesture duration (seconds). Shorter flicks harder (momentum scrolling).")
     var duration: Double = 0.35
@@ -214,7 +216,9 @@ struct SwipeCommand: ParsableCommand {
         let start: (x: Double, y: Double)
         let end: (x: Double, y: Double)
         if let from, let to {
-            let layout = ScreenGrid(width: session.screen.width, height: session.screen.height, density: gridSize)
+            let layout = ScreenGrid(
+                width: session.screen.width, height: session.screen.height,
+                pointScale: session.screen.pointScale, density: gridSize)
             let (a, b) = (try layout.rect(named: from), try layout.rect(named: to))
             (start, end) = ((a.midX, a.midY), (b.midX, b.midY))
         } else {

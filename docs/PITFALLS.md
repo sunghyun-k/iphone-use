@@ -907,6 +907,67 @@ What the code does now:
 - The daemon no longer caches the screen size: folding or turning the phone changes it, and the
   lookup costs about 50 ms over the daemon's held connection (30 ms to connect, 20 ms for the call).
 
+## Controls without text
+
+### 52. Switches and icons are found by shape, not by a model
+
+OCR gives no line for a switch, a check mark drawn as a glyph, or an icon-only button, so an agent had
+to open the screenshot to tell whether a switch was on or to find a back chevron. `ScreenElements` now
+finds them on the Mac in about 15 ms and lists them as `[bracketed]` lines among the text.
+
+What was tried, on 14 screenshots of the foldable iPhone (Settings, a dark-mode Clock, App Store,
+Reminders, and two social apps with their own icon art):
+
+- **Vision contour detection** (`VNDetectContoursRequest`) found none of the light-mode off switches:
+  a light gray track on a white card has too little contrast. Dropped.
+- **Flat-color regions.** The screen, scaled down to points, is flood-filled into regions of about one
+  color; regions over 1,500 pt² are backgrounds, and the rest groups into blobs. A switch is a blob
+  22–40 pt high, 1.7–2.8 times as wide, filling over 60% of its box, with a near-white knob. Its state
+  is the knob's side, not the track color: apps tint the track, and an off track is light gray in
+  light mode but dark gray in dark mode. 14 of 14 switches right, no false ones.
+  - Matching the track region alone (without grouping) missed most on-switches: the iOS 26 knob is a
+    wide pill, so the green left of it is nearly square.
+- **SF Symbol templates.** Small one-color blobs are compared with about 50 common symbols, rendered in
+  three weights (a list's check mark is light, a back chevron semibold). Right for every named one in
+  Apple's apps (back chevron, row chevrons, ⓘ, check mark, Clock's tab icons, share, plus).
+  - With all ~9,500 symbols, look-alikes won as often as the right one (App Store's Games tab came
+    out as `octagon.fill` at 0.92), and rendering them took 20 s. The short list is kept.
+  - Filled discs (`xmark.circle.fill`, `checkmark.circle.fill`) matched round profile pictures at up
+    to 0.98, so they're not in the list.
+  - Below 0.94 a name is more often wrong than right; those stay `[icon]`.
+  - Apps with their own icon art (the social apps) get only `[icon]` and a position.
+- **"One color".** Icons are a single color; photos, avatars and emoji aren't. Measuring the color
+  spread over all differing pixels failed every glyph, because anti-aliased edges are blends with the
+  background. Only the solid core (pixels at least 80% as far from the background as the farthest)
+  is measured, and a photo is caught by how few of its pixels are core.
+- **The on-device model** (macOS 27 `FoundationModels`, which takes images). Given a whole screen it
+  named switch states correctly but skipped half of them, garbled Korean labels, gave no positions,
+  took 1.6–5 s, and on one screen repeated the same item fifteen times. Given one icon cut out, it
+  named app-specific icons well (house, paper plane, play button, rocket) in about 0.55 s each. A
+  candidate for naming `[icon]`s on request, not for every `ui`.
+- Big icons right before a row's text (Settings' colored squares, profile pictures) are left out:
+  pressing the text does the same, and they doubled the list.
+
+Pixels per point come from `getdisplayinfo`'s `pointScale`, asked once per screen size. The screen
+size alone can't tell: the foldable's inner panel (2007 px wide, 3x) is as wide as an iPad (2x).
+
+Known gaps: icons on a Liquid Glass bar floating over a photo or video (the background isn't flat, so
+there's no region to subtract), and glass buttons whose shadow blends into what's behind.
+
+### 53. Ten grid cells across was right only on an iPhone
+
+The grid divided the screen's short side into ten cells: about 40 pt on an iPhone, but 47 pt on the
+foldable's cover panel, 67 pt on its inner panel and 83 pt on an iPad. `touch --cell` taps a cell's
+center, which can then be up to half a cell from the control the agent meant. Measured on 282 targets
+(controls and short text) from 14 screenshots of the cover panel, the center of the target's cell was
+inside a 44 pt touch area around it 61% of the time with 58 pt cells, 90% with 47 pt, and 100% with
+39 pt or smaller.
+
+Cells are now about 40 pt everywhere: the cell count comes from the panel's `pointScale` (#52), with
+ten as the minimum. `--grid-size` still overrides it, and `screenshot --grid` prints it in its tap hint
+only when it was given. The saved image stays 720 px wide, so an iPad's cells are smaller on it
+(about 34 px, labels still readable).
+
 ## Input timing
 
 ### 54. A new HID connection drops the reports it gets while the device is busy

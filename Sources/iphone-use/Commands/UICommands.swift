@@ -6,12 +6,13 @@ import Foundation
 struct UICommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "ui",
-        abstract: "Read the text on the screen as a list of @t refs, and save the screenshot with a grid.",
+        abstract: "Read the screen as a list of @t refs (text, plus toggles and icons), and save the screenshot with a grid.",
         discussion: """
-            Each line is `@tN<TAB>text<TAB>grid cell`, top to bottom. Pass the ref to press / type. Only what's
-            on screen is listed; scroll to see more. Icons and toggles have no text: look at the saved
-            screenshot and use touch --cell. On the same screen refs stay the same; on a new screen numbering
-            restarts at 1.
+            Each line is `@tN<TAB>text<TAB>grid cell`, top to bottom. Pass the ref to press / type. Controls
+            without text are found by their shape and listed in brackets: `[toggle on] Wi-Fi` (a switch, its
+            state and its row's label), `[chevron left]` (a common symbol), `[icon]` (an unrecognized icon).
+            Only what's on screen is listed; scroll to see more. On the same screen refs stay the same; on a
+            new screen numbering restarts at 1.
             """
     )
 
@@ -30,12 +31,12 @@ struct UICommand: ParsableCommand {
             // is printed either way.
             _ = try screen.observe(image)
             guard let find else {
-                print("\(screen.state.entries.count) text lines")
+                print("\(screen.state.entries.count) lines")
                 screen.printList(screen.state.entries)
                 return
             }
             let hits = screen.state.entries.filter { $0.text.localizedCaseInsensitiveContains(find) }
-            print("\(hits.count) of \(screen.state.entries.count) text lines contain \"\(find)\"")
+            print("\(hits.count) of \(screen.state.entries.count) lines contain \"\(find)\"")
             if hits.isEmpty {
                 print("(not on this screen — look at the screenshot, or scroll and run ui again)")
             }
@@ -58,7 +59,7 @@ func parseRef(_ text: String) throws -> Int {
 struct PressCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "press",
-        abstract: "Tap a text line from the ui list (@tN) and report how the screen changed.",
+        abstract: "Tap a line from the ui list (@tN), text or [control], and report how the screen changed.",
         discussion: """
             Checks that the line is still where ui read it, then taps its center. If it moved, it's found again
             by its text; if it's gone, nothing is pressed. Once the screen settles, reports the result:

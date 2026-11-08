@@ -62,6 +62,7 @@ Sources/iphone-use/
   Daemon/            Resident mode: connection reuse + Unix-socket RPC
   UIScreen.swift     Basis of ui/press/type: OCR line lists with @t refs, finding a line again, post-action diff
   TextRecognizer.swift  Screenshot OCR (Vision) and on-screen keyboard detection
+  ScreenElements.swift  Controls without text, by shape: switches and their state, SF Symbol icons
   ScreenGrid.swift   Named grid for screenshot --grid and cell math for touch/swipe --cell
   HangulKeys.swift   Hangul -> Dubeolsik key positions (text/type)
 Sources/CMobileDevice/  C bindings for MobileDevice.framework

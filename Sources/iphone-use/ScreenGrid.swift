@@ -11,7 +11,11 @@ import Foundation
 ///
 /// Cells are defined in **device pixels** — squares that divide the short side into `density` cells. However
 /// far the screenshot is shrunk, a cell name points at the same place, and `touch --cell` recomputes the same
-/// cell from the device screen size alone.
+/// cell from the device screen size and point scale alone.
+///
+/// By default a cell is about 40 pt on every device. A fixed ten cells across made them 40 pt on an
+/// iPhone but 67 pt on the unfolded foldable and 83 pt on an iPad, where a cell's center often missed a
+/// 44 pt control in it (PITFALLS #53).
 struct ScreenGrid {
     let width: Double
     let height: Double
@@ -19,8 +23,25 @@ struct ScreenGrid {
     let columns: Int
     let rows: Int
 
-    /// 10 cells by default. On an iPhone (1290px) a cell is 129px ≈ 43pt, about a fingertip.
+    /// The fewest cells across the short side: an iPhone's 402 pt width gives 10.
     static let defaultDensity = 10
+
+    /// Target cell size. A cell's center is then within 20 pt of anything in it, inside the 44 pt that
+    /// Apple's smallest touch targets cover.
+    static let cellPoints = 40.0
+
+    /// How many cells across the short side make cells of about `cellPoints`.
+    static func density(width: Double, height: Double, pointScale: Double?) -> Int {
+        guard let pointScale, pointScale > 0 else { return defaultDensity }
+        return max(defaultDensity, Int((min(width, height) / pointScale / cellPoints).rounded()))
+    }
+
+    /// `density` if given (`--grid-size`), otherwise cells of about 40 pt.
+    init(width: Double, height: Double, pointScale: Double?, density: Int? = nil) {
+        self.init(
+            width: width, height: height,
+            density: density ?? Self.density(width: width, height: height, pointScale: pointScale))
+    }
 
     init(width: Double, height: Double, density: Int = Self.defaultDensity) {
         self.width = width

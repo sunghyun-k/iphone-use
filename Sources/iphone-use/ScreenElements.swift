@@ -1,0 +1,446 @@
+import AppKit
+import CoreGraphics
+import Foundation
+
+/// Controls without text, found by their shape on the screenshot: switches with their state, and small
+/// one-color icons, named when they match a common SF Symbol. `ui` lists them as `[bracketed]` lines next
+/// to the OCR text, so an agent can tell whether a switch is on, or press a back chevron, without looking
+/// at the image (PITFALLS #52).
+///
+/// Works at about point resolution. The screen is cut into flat-color regions; large ones are
+/// backgrounds, and what's left groups into blobs: text, glyphs, controls. Vision's contour detection was
+/// tried first and missed light-mode switches entirely (a light gray track on white has too little
+/// contrast).
+enum ScreenElements {
+    /// Pixels per point when the device didn't say (`getdisplayinfo`'s `pointScale` is the real answer):
+    /// iPhones are 3x and iPads 2x, but the foldable's inner panel (2007px wide) is as wide as an iPad's,
+    /// so size alone can't tell.
+    static func guessScale(width: Int, height: Int) -> Int {
+        let short = min(width, height)
+        return short < 1000 || short >= 1450 ? 2 : 3
+    }
+
+    /// Bracketed lines for the controls on `image`. `text` is the OCR result: icons overlapping text are
+    /// skipped (OCR already has them, like "›" or "✓"), and a switch takes the label to its left.
+    static func find(in image: CGImage, text: [TextRecognizer.Line], scale s: Int) -> [TextRecognizer.Line] {
+        guard let map = RegionMap(image, scale: s) else { return [] }
+        let px = CGFloat(s)
+        var found: [TextRecognizer.Line] = []
+        var taken: [CGRect] = []
+
+        for blob in map.blobs {
+            guard let state = map.switchState(blob) else { continue }
+            let frame = blob.rect.scaled(px)
+            let label = text.filter { $0.frame.maxX < frame.minX && abs($0.frame.midY - frame.midY) < frame.height * 0.6 }
+                .max { $0.frame.maxX < $1.frame.maxX }
+            found.append(.init(text: "[toggle \(state)]" + (label.map { " " + $0.text } ?? ""), frame: frame))
+            taken.append(frame)
+        }
+
+        let textInPoints = text.map { CGRect(x: $0.frame.minX / px, y: $0.frame.minY / px, width: $0.frame.width / px, height: $0.frame.height / px) }
+        for group in map.iconGroups(skipping: textInPoints) {
+            let frame = group.scaled(px)
+            if taken.contains(where: { $0.insetBy(dx: -px * 3, dy: -px * 3).contains(frame) }) { continue }
+            let overlapsText = text.contains { line in
+                let i = line.frame.intersection(frame)
+                return !i.isNull && i.width * i.height > 0.3 * frame.width * frame.height
+            }
+            if overlapsText { continue }
+            // A big icon right before a row's text (Settings' colored squares, a profile picture next to a
+            // name) adds nothing: pressing the text does the same. Small ones stay, like a heart before its
+            // like count.
+            let leading = frame.width >= 24 * px && frame.height >= 24 * px && text.contains { line in
+                line.frame.minX > frame.maxX && line.frame.minX - frame.maxX < 16 * px
+                    && abs(line.frame.midY - frame.midY) < frame.height * 0.7
+            }
+            if leading { continue }
+            guard let ink = Ink(image, frame.insetBy(dx: -px, dy: -px)), ink.oneColor else { continue }
+            found.append(.init(text: "[\(Symbols.name(for: ink) ?? "icon")]", frame: frame))
+        }
+        return found
+    }
+}
+
+extension CGRect {
+    fileprivate func scaled(_ s: CGFloat) -> CGRect {
+        CGRect(x: minX * s, y: minY * s, width: width * s, height: height * s)
+    }
+}
+
+// MARK: - Regions and blobs
+
+/// The screen at point resolution, cut into flat-color regions, with the non-background pixels grouped
+/// into blobs.
+private struct RegionMap {
+    struct Blob {
+        var minX = Int.max, minY = Int.max, maxX = 0, maxY = 0
+        var pixels: [Int] = []
+        var width: Int { maxX - minX + 1 }
+        var height: Int { maxY - minY + 1 }
+        var rect: CGRect { CGRect(x: minX, y: minY, width: width, height: height) }
+    }
+
+    let w: Int, h: Int
+    private var rgb: [UInt8]
+    private var region: [Int32]
+    private var regionSize: [Int]
+    private(set) var blobs: [Blob] = []
+
+    /// Regions larger than this (in points²) are backgrounds: cards, bars, the page. A switch track is
+    /// about 1,200.
+    static let backgroundArea = 1500
+
+    init?(_ image: CGImage, scale: Int) {
+        w = image.width / scale
+        h = image.height / scale
+        guard w > 0, h > 0 else { return nil }
+        var data = [UInt8](repeating: 0, count: w * h * 4)
+        guard
+            let ctx = CGContext(
+                data: &data, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        ctx.interpolationQuality = .high
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        rgb = data
+        region = [Int32](repeating: -1, count: w * h)
+        regionSize = []
+        segment()
+        blobs = Self.group(w: w, h: h, all: Array(0..<(w * h))) { [regionSize, region] in
+            regionSize[Int(region[$0])] > Self.backgroundArea
+        }
+    }
+
+    func color(_ i: Int) -> (Int, Int, Int) { (Int(rgb[i * 4]), Int(rgb[i * 4 + 1]), Int(rgb[i * 4 + 2])) }
+
+    static func near(_ a: (Int, Int, Int), _ b: (Int, Int, Int), _ tol: Int) -> Bool {
+        abs(a.0 - b.0) <= tol && abs(a.1 - b.1) <= tol && abs(a.2 - b.2) <= tol
+    }
+
+    /// Flood fill into regions of about one color. A pixel joins when it's close both to its neighbor
+    /// (soft gradients) and to the region's first pixel (so a gradient doesn't swallow everything).
+    private mutating func segment() {
+        var stack: [Int] = []
+        for start in 0..<(w * h) where region[start] < 0 {
+            let id = Int32(regionSize.count)
+            let seed = color(start)
+            var n = 0
+            region[start] = id
+            stack.append(start)
+            while let i = stack.popLast() {
+                n += 1
+                let x = i % w, y = i / w
+                let c = color(i)
+                for j in [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1]
+                where j >= 0 && region[j] < 0 {
+                    let cj = color(j)
+                    if Self.near(cj, seed, 10) && Self.near(cj, c, 6) {
+                        region[j] = id
+                        stack.append(j)
+                    }
+                }
+            }
+            regionSize.append(n)
+        }
+    }
+
+    /// 8-connected groups of the pixels in `all` that aren't background.
+    static func group(w: Int, h: Int, all: [Int], isBackground: (Int) -> Bool) -> [Blob] {
+        // Whole-screen flags for the first pass; a set for a single blob's pixels, which would otherwise
+        // allocate two screen-sized arrays per blob looked into.
+        let small = all.count * 4 < w * h
+        var memberFlags = small ? [] : [Bool](repeating: false, count: w * h)
+        var memberSet = Set<Int>()
+        for i in all where !isBackground(i) {
+            if small { memberSet.insert(i) } else { memberFlags[i] = true }
+        }
+        func member(_ i: Int) -> Bool { small ? memberSet.contains(i) : memberFlags[i] }
+        var seenFlags = small ? [] : [Bool](repeating: false, count: w * h)
+        var seenSet = Set<Int>()
+        func seen(_ i: Int) -> Bool { small ? seenSet.contains(i) : seenFlags[i] }
+        func see(_ i: Int) { if small { seenSet.insert(i) } else { seenFlags[i] = true } }
+
+        var blobs: [Blob] = []
+        var stack: [Int] = []
+        for start in all where member(start) && !seen(start) {
+            var blob = Blob()
+            see(start)
+            stack.append(start)
+            while let i = stack.popLast() {
+                let x = i % w, y = i / w
+                blob.pixels.append(i)
+                blob.minX = min(blob.minX, x); blob.maxX = max(blob.maxX, x)
+                blob.minY = min(blob.minY, y); blob.maxY = max(blob.maxY, y)
+                for dy in -1...1 {
+                    for dx in -1...1 {
+                        let nx = x + dx, ny = y + dy
+                        guard nx >= 0, ny >= 0, nx < w, ny < h else { continue }
+                        let j = ny * w + nx
+                        if member(j) && !seen(j) {
+                            see(j)
+                            stack.append(j)
+                        }
+                    }
+                }
+            }
+            blobs.append(blob)
+        }
+        return blobs
+    }
+
+    /// "on" / "off" if the blob is a switch: a filled capsule about 28–34 pt high with a white knob at one
+    /// end. Its state is where the knob is, not the track color: apps tint the track, and the off track is
+    /// light gray in light mode but dark gray in dark mode.
+    func switchState(_ blob: Blob) -> String? {
+        guard blob.height >= 22, blob.height <= 40 else { return nil }
+        let aspect = Double(blob.width) / Double(blob.height)
+        guard aspect > 1.7, aspect < 2.8 else { return nil }
+        // A capsule fills about 0.8 of its box; the Wi-Fi glyph and other outlines fill much less.
+        guard Double(blob.pixels.count) / Double(blob.width * blob.height) > 0.6 else { return nil }
+        var knobX = 0, knobN = 0
+        for i in blob.pixels {
+            let c = color(i)
+            if lum(c) > 0.96 && saturation(c) < 0.08 {
+                knobX += i % w
+                knobN += 1
+            }
+        }
+        guard knobN > 30 else { return nil }
+        let at = (Double(knobX) / Double(knobN) - Double(blob.minX)) / Double(blob.width)
+        // A capsule button with a white label has its "knob" in the middle.
+        if at > 0.55 { return "on" }
+        if at < 0.45 { return "off" }
+        return nil
+    }
+
+    /// Icon-sized groups of blobs. Pieces close together become one (a repost icon's two arrows, ⓘ's
+    /// dot and stem). A bigger blob with a flat fill inside (a round button with a glyph on it) is looked
+    /// into: the fill is its background, and the glyph comes out on its own.
+    /// Pieces mostly inside a `text` rect (points) are letters, left out before merging: there are hundreds
+    /// of them, and merging is quadratic.
+    func iconGroups(skipping text: [CGRect]) -> [CGRect] {
+        var pieces: [CGRect] = []
+        for blob in blobs {
+            // A thin outline around something bigger (a round button's rim) would be merged with the
+            // glyph inside it.
+            let outline = max(blob.width, blob.height) > 30 && blob.pixels.count * 5 < blob.width * blob.height
+            if outline { continue }
+            if blob.width <= 44 && blob.height <= 44 {
+                pieces.append(blob.rect)
+            } else if blob.width <= 64 && blob.height <= 64 {
+                // The fill: the blob's largest region.
+                var count: [Int32: Int] = [:]
+                for i in blob.pixels { count[region[i], default: 0] += 1 }
+                guard let fill = count.max(by: { $0.value < $1.value }), fill.value * 10 > blob.pixels.count * 4 else {
+                    continue
+                }
+                let inner = Self.group(w: w, h: h, all: blob.pixels) { region[$0] == fill.key }
+                pieces += inner.filter {
+                    $0.pixels.count > 8 && !(max($0.width, $0.height) > 30 && $0.pixels.count * 5 < $0.width * $0.height)
+                }.map(\.rect)
+            }
+        }
+        pieces = pieces.filter { piece in
+            guard piece.width >= 6 || piece.height >= 6 else { return false }
+            return !text.contains { t in
+                let i = t.intersection(piece)
+                return !i.isNull && i.width * i.height > 0.5 * piece.width * piece.height
+            }
+        }
+        // Merge pieces whose boxes come within 2 pt of each other, while the result stays icon-sized.
+        var merged = true
+        while merged {
+            merged = false
+            outer: for a in 0..<pieces.count {
+                for b in (a + 1)..<pieces.count where pieces[a].insetBy(dx: -2, dy: -2).intersects(pieces[b]) {
+                    let u = pieces[a].union(pieces[b])
+                    guard u.width <= 44, u.height <= 44 else { continue }
+                    pieces[a] = u
+                    pieces.remove(at: b)
+                    merged = true
+                    break outer
+                }
+            }
+        }
+        return pieces.filter { r in
+            let aspect = r.width / r.height
+            return r.width >= 8 && r.height >= 8 && aspect > 0.3 && aspect < 3.5
+        }
+    }
+}
+
+private func lum(_ c: (Int, Int, Int)) -> Double {
+    (0.299 * Double(c.0) + 0.587 * Double(c.1) + 0.114 * Double(c.2)) / 255
+}
+
+private func saturation(_ c: (Int, Int, Int)) -> Double {
+    let mx = max(c.0, c.1, c.2), mn = min(c.0, c.1, c.2)
+    return mx == 0 ? 0 : Double(mx - mn) / Double(mx)
+}
+
+// MARK: - Icon shapes
+
+/// The pixels of a glyph that differ from the background around it, at full resolution.
+private struct Ink {
+    var mask: [Bool]
+    var w: Int, h: Int
+    /// True when the ink is one color, as icons are. Photos, avatars and emoji aren't.
+    var oneColor: Bool
+
+    init?(_ image: CGImage, _ rect: CGRect) {
+        guard let crop = image.cropping(to: rect.integral) else { return nil }
+        self.init(crop)
+    }
+
+    init?(_ crop: CGImage) {
+        let cw = crop.width, ch = crop.height
+        guard cw > 2, ch > 2 else { return nil }
+        var p = [UInt8](repeating: 0, count: cw * ch * 4)
+        guard
+            let ctx = CGContext(
+                data: &p, width: cw, height: ch, bitsPerComponent: 8, bytesPerRow: cw * 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        ctx.draw(crop, in: CGRect(x: 0, y: 0, width: cw, height: ch))
+        // The background is the border's average color.
+        var bg = (0, 0, 0), n = 0
+        func add(_ x: Int, _ y: Int) {
+            let i = (y * cw + x) * 4
+            bg.0 += Int(p[i]); bg.1 += Int(p[i + 1]); bg.2 += Int(p[i + 2]); n += 1
+        }
+        for x in 0..<cw { add(x, 0); add(x, ch - 1) }
+        for y in 1..<(ch - 1) { add(0, y); add(cw - 1, y) }
+        bg = (bg.0 / n, bg.1 / n, bg.2 / n)
+
+        var full = [Bool](repeating: false, count: cw * ch)
+        var minX = cw, minY = ch, maxX = -1, maxY = -1
+        var inks: [(diff: Int, color: (Int, Int, Int))] = []
+        for y in 0..<ch {
+            for x in 0..<cw {
+                let i = (y * cw + x) * 4
+                let c = (Int(p[i]), Int(p[i + 1]), Int(p[i + 2]))
+                let diff = abs(c.0 - bg.0) + abs(c.1 - bg.1) + abs(c.2 - bg.2)
+                guard diff > 150 else { continue }
+                full[y * cw + x] = true
+                minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+                inks.append((diff, c))
+            }
+        }
+        guard maxX >= 0, inks.count >= 8 else { return nil }
+        // Judge the color by the solid core only: anti-aliased edges are blends with the background and
+        // would make every glyph look multicolored.
+        let strongest = inks.map(\.diff).max()!
+        let core = inks.filter { $0.diff * 10 >= strongest * 8 }
+        func sd(_ value: ((Int, Int, Int)) -> Int) -> Double {
+            let v = core.map { Double(value($0.color)) }
+            let mean = v.reduce(0, +) / Double(v.count)
+            return (v.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(v.count)).squareRoot()
+        }
+        // A photo's colors spread out, so few of its pixels are as far from the background as the farthest.
+        oneColor = core.count * 20 >= inks.count * 9 && max(sd { $0.0 }, sd { $0.1 }, sd { $0.2 }) < 40
+        w = maxX - minX + 1
+        h = maxY - minY + 1
+        mask = [Bool](repeating: false, count: w * h)
+        for y in 0..<h { for x in 0..<w { mask[y * w + x] = full[(y + minY) * cw + x + minX] } }
+    }
+}
+
+/// Matching a glyph against rendered SF Symbols. Only common navigation symbols: with all ~9,500, look-
+/// alikes win as often as the right one. Filled discs (`xmark.circle.fill`) are left out: every round
+/// profile picture matched them (PITFALLS #52).
+private enum Symbols {
+    static let names = [
+        "chevron.left", "chevron.right", "chevron.down", "chevron.up", "plus", "xmark", "checkmark",
+        "info.circle", "magnifyingglass", "square.and.arrow.up", "trash", "ellipsis", "ellipsis.circle",
+        "gearshape", "heart", "heart.fill", "star", "star.fill", "bell", "square.and.pencil",
+        "line.3.horizontal", "line.3.horizontal.decrease", "slider.horizontal.3", "arrow.up", "arrow.left",
+        "arrow.clockwise", "mic", "camera", "photo", "play.fill", "pause.fill", "bookmark", "list.bullet",
+        "calendar", "clock", "folder", "paperplane", "house", "house.fill", "person.crop.circle", "globe",
+        "alarm.fill", "stopwatch.fill", "timer", "square.grid.2x2", "minus", "arrow.down.circle",
+        "lock.fill", "wifi", "square.and.arrow.down", "doc.text.image", "sparkles",
+    ]
+
+    static let side = 32
+
+    /// Normalized masks, rendered once per process (the daemon keeps them).
+    /// Three weights: apps draw the same symbol light (a list's check mark) or semibold (a back chevron).
+    static let templates: [(name: String, shape: [Float], aspect: Double)] = names.flatMap { name in
+        [NSFont.Weight.light, .regular, .semibold].compactMap { render(name, weight: $0) }
+    }
+
+    static func render(_ name: String, weight: NSFont.Weight) -> (name: String, shape: [Float], aspect: Double)? {
+        guard
+            let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 40, weight: weight))
+        else { return nil }
+        let size = symbol.size
+        let w = Int(size.width) + 8, h = Int(size.height) + 8
+        guard
+            let ctx = CGContext(
+                data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        ctx.setFillColor(.white)
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+        symbol.draw(in: NSRect(x: 4, y: 4, width: size.width, height: size.height))
+        NSGraphicsContext.restoreGraphicsState()
+        guard let image = ctx.makeImage(), let ink = Ink(image) else { return nil }
+        return (name.replacingOccurrences(of: ".", with: " "), shape(ink), Double(ink.w) / Double(ink.h))
+    }
+
+    /// The best match if it's close enough. Below this score custom icons start getting confident wrong
+    /// names (a profile picture as "xmark circle fill").
+    static func name(for ink: Ink) -> String? {
+        let v = shape(ink), aspect = Double(ink.w) / Double(ink.h)
+        var best: (String, Float)?
+        for t in templates {
+            let penalty = Float(min(1, abs(log(aspect / t.aspect)) / 1.2))
+            let s = cosine(v, t.shape) * (1 - 0.5 * penalty)
+            if s > (best?.1 ?? 0) { best = (t.name, s) }
+        }
+        guard let best, best.1 >= 0.94 else { return nil }
+        return best.0
+    }
+
+    /// Fits the mask into a `side`² square keeping its aspect, and blurs it a little so a line one pixel
+    /// off still overlaps.
+    static func shape(_ ink: Ink) -> [Float] {
+        let n = side
+        var out = [Float](repeating: 0, count: n * n)
+        let s = Double(n - 4) / Double(max(ink.w, ink.h))
+        let ox = (Double(n) - Double(ink.w) * s) / 2, oy = (Double(n) - Double(ink.h) * s) / 2
+        for y in 0..<n {
+            for x in 0..<n {
+                let sx = (Double(x) + 0.5 - ox) / s, sy = (Double(y) + 0.5 - oy) / s
+                let ix = Int(sx), iy = Int(sy)
+                if sx >= 0, sy >= 0, ix < ink.w, iy < ink.h, ink.mask[iy * ink.w + ix] { out[y * n + x] = 1 }
+            }
+        }
+        var blurred = [Float](repeating: 0, count: n * n)
+        for y in 0..<n {
+            for x in 0..<n {
+                var acc: Float = 0, count: Float = 0
+                for dy in -1...1 {
+                    for dx in -1...1 {
+                        let nx = x + dx, ny = y + dy
+                        if nx >= 0, ny >= 0, nx < n, ny < n { acc += out[ny * n + nx]; count += 1 }
+                    }
+                }
+                blurred[y * n + x] = acc / count
+            }
+        }
+        return blurred
+    }
+
+    static func cosine(_ a: [Float], _ b: [Float]) -> Float {
+        var ab: Float = 0, aa: Float = 0, bb: Float = 0
+        for i in 0..<a.count {
+            ab += a[i] * b[i]
+            aa += a[i] * a[i]
+            bb += b[i] * b[i]
+        }
+        return ab / ((aa * bb).squareRoot() + 1e-6)
+    }
+}

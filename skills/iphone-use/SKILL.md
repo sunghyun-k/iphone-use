@@ -1,6 +1,6 @@
 ---
 name: iphone-use
-description: Operate a real iPhone or iPad connected over USB or Wi-Fi. Read the screen's text as a numbered list with a gridded screenshot next to it (ui), press a line by number (press), tap icons by grid cell (touch --cell), and type into fields (type). Also launches apps and deep links, scrolls, presses hardware buttons, and changes appearance, accessibility settings and the simulated location. Use it when a task needs a physical device, not a simulator.
+description: Operate a real iPhone or iPad connected over USB or Wi-Fi. Read the screen as a numbered list (text, plus toggles with their on/off state and common icons) with a gridded screenshot next to it (ui), press a line by number (press), tap other icons by grid cell (touch --cell), and type into fields (type). Also launches apps and deep links, scrolls, presses hardware buttons, and changes appearance, accessibility settings and the simulated location. Use it when a task needs a physical device, not a simulator.
 ---
 
 # iphone-use
@@ -46,7 +46,7 @@ connection errors.
 
 ```sh
 iphone-use devices                     # name, UDID, connection
-iphone-use daemon &                    # start this first; every command gets faster. One daemon, no device option
+iphone-use daemon &                    # start this first; every command gets faster. One daemon, no device option; if one is running it says so and exits
 iphone-use ui                          # always look at the current screen first
 ```
 
@@ -62,21 +62,23 @@ iphone-use ui                          # always look at the current screen first
 
 ## The basic loop: read the text, look at the screenshot, press
 
-`ui` takes a screenshot, reads its text on the Mac (OCR), and prints every line it read with a ref.
-It also saves the screenshot, with a named grid drawn over it, and prints where.
+`ui` takes a screenshot, reads its text on the Mac (OCR), finds the controls that have no text
+(switches, small icons) by their shape, and prints every line with a ref. It also saves the
+screenshot, with a named grid drawn over it, and prints where.
 
 ```sh
 iphone-use ui
-# 23 text lines
+# 24 lines
 # @t1	Settings	B2
 # @t2	Search	C3
 # @t3	Apple Account	C5
 # @t4	Airplane Mode	C8
-# @t5	Wi-Fi	B9
-# @t6	HomeNet	H9
+# @t5	[toggle off] Airplane Mode	I8
+# @t6	Wi-Fi	B9
+# @t7	HomeNet	H9
 # …
-# Screenshot: /Users/me/.iphone-use/screen-<udid>.png (grid cells as in the third column; icons without text: touch --cell)
-iphone-use press @t5          # tap that line → reports the resulting screen
+# Screenshot: /Users/me/.iphone-use/screen-<udid>.png (grid cells as in the third column; [bracketed] lines are controls found by their shape — check the image when it matters)
+iphone-use press @t6          # tap that line → reports the resulting screen
 iphone-use type @t2 "Battery" # tap the field (here its placeholder text) and type
 ```
 
@@ -85,15 +87,25 @@ iphone-use type @t2 "Battery" # tap the field (here its placeholder text) and ty
 - Each line is `@tN<TAB>text<TAB>grid cell`, top to bottom and left to right within a row.
 - A row's label and its value often come out as separate lines with the same row in their cells
   (`iOS Version	B4`, then `27.3 >	H4`). Pair them by row.
-- The text is **what OCR read**, in the device's language. It can be slightly off (a misread letter,
-  a symbol for an icon). Pick by meaning, not exact spelling.
+- The text is **what OCR read**, in the device's language. It can be slightly off (a misread letter),
+  and an icon can come out as a stray character or two (a bed icon as a single letter). Pick by
+  meaning, not exact spelling.
+- A value with an arrow at a row's right end (`Off >`, `5 min >`) is not a switch: the row opens a
+  screen where you pick the value. Press the row.
 - The grid cell is where the line's center is on the saved screenshot.
 - **Only what's on screen is listed.** To see more, `scroll down` (it prints the new list).
-- **Things without text aren't in the list**: icons, toggles, checkmarks, images, empty fields. Look
-  at the screenshot for those:
-  - **Whether a toggle is on** (green) or off, a checkmark, a badge, a selected tab: only the image
-    shows it.
-  - **To press an icon** (back chevron, +, share, a tab bar icon), `touch --cell G21` its cell.
+- **`[bracketed]` lines are controls without text**, found by their shape. Press them like any line.
+  - `[toggle on] Wi-Fi` / `[toggle off] …`: a switch, its state, and the label to its left. Pressing it
+    flips the switch.
+  - `[chevron left]`, `[plus]`, `[info circle]`, `[checkmark]`, `[magnifyingglass]` …: a common icon,
+    named after its SF Symbol. `[chevron left]` near the top is usually the back button.
+  - `[icon]`: an icon that wasn't recognized (an app's own artwork). Look at the screenshot to see what
+    it is before pressing it.
+- **Still not in the list**: images, colors, badges, which tab is selected, empty fields, and icons
+  over a photo or video (a floating glass tab bar). Look at the screenshot for those, and
+  `touch --cell G21` an icon that has no line.
+- A bracketed line is a judgment from pixels. Before a change that matters (a setting the user cares
+  about), confirm on the screenshot.
 - `ui --find "text"` prints only the lines containing the text (case-insensitive), from the current
   screen.
 - **Always run `ui` before your first action.** This is the user's personal device. They may have just
@@ -101,7 +113,7 @@ iphone-use type @t2 "Battery" # tap the field (here its placeholder text) and ty
   user.
 
 **Looking at the screenshot.** Read the saved file whenever the text alone doesn't settle it: which
-line is a button, whether a toggle is on, where an icon is. The image is 720 px wide plus grid
+line is a button, what an `[icon]` is, where an unlisted icon is. The image is 720 px wide plus grid
 margins, small enough to read every turn. It's overwritten by every command that reads the screen. It
 shows whatever is on the user's screen: don't copy it elsewhere or attach it anywhere.
 
@@ -112,7 +124,7 @@ then read it again and print the result. You don't need a separate `ui`.
 
 ```
 Pressed @t5 "Wi-Fi"
-New screen — 18 text lines        ← most text changed; refs restart at @t1
+New screen — 18 lines             ← most lines changed; refs restart at @t1
 @t1	Settings	A2
 @t2	Wi-Fi	E2
 …
@@ -133,9 +145,13 @@ added	@t24	Battery Health	C6
   - `removed`: a line disappeared.
 
   Every other ref stays valid.
-- **"Same screen — no text changed"**: the text didn't change. Look at the screenshot first: a toggle
-  or an icon may have changed. If nothing reacted, don't press the same line again; it's probably a
-  label. Press the control next to it (look at the screenshot) or another line.
+- `moved`: a few lines changed place while the rest stayed, such as a check mark that went to the row
+  you picked: `moved	@t9	✓	H8	(was: H10)`. When the whole list moves (a scroll), nothing is listed
+  as moved.
+- A switch you flipped shows as `changed	@t5	[toggle on] Airplane Mode	I8	(was: [toggle off] Airplane Mode)`.
+- **"Same screen — no line changed"**: no line changed. Look at the screenshot first: something
+  without a line (an image, a color) may have changed. If nothing reacted, don't press the same line
+  again; it's probably a label. Press the control next to it or another line.
 - **Over a playing video** the result starts with `(part of the screen keeps moving, like a video: read
   1.2 s after the input…)`. A player's controls fade in about a second after a tap and hide again a few
   seconds later, so the list is read while they're up. By your next command they may be gone: if
@@ -162,13 +178,13 @@ by its text)`; if that text appears more than once, it stops instead of guessing
 ## Commands
 
 ```
-iphone-use ui [--find "text"] [--wait]            # text lines on screen (@tN<TAB>text<TAB>cell) + gridded screenshot
+iphone-use ui [--find "text"] [--wait]            # lines on screen (@tN<TAB>text or [control]<TAB>cell) + gridded screenshot
 iphone-use press @tN [--hold 0.8] [--no-ui]       # tap the line; --hold 0.6 or more is a long press
-iphone-use press @tN --trailing                   # tap the right end of that line's row (ⓘ, chevron, toggle)
+iphone-use press @tN --trailing                   # tap the right end of that line's row (when its ⓘ or switch isn't listed)
 iphone-use press @tN --swipe left|right           # short swipe on that row to reveal hidden buttons (Delete etc.)
 iphone-use type @tN "text" [--enter] [--clear]    # tap the field and type; --clear erases what was there
 iphone-use type "text" [--enter]                  # keep typing into the already focused field
-iphone-use touch --cell G21 [--hold 0.8]          # tap the center of a grid cell (icons, toggles)
+iphone-use touch --cell G21 [--hold 0.8]          # tap the center of a grid cell (icons that have no line)
 iphone-use scroll down|up|left|right [--amount 0.5] [--fling]
 iphone-use swipe --from C12 --to C4 [--duration 0.35]
 iphone-use home                                   # to the home screen (no list)
@@ -182,7 +198,7 @@ iphone-use settings                               # current appearance, text siz
 iphone-use settings --style dark|light --text-size l ...
 iphone-use location 37.33 -122.01 / location --clear
 
-iphone-use screenshot -o f.png [--max-width N] [--grid [--grid-size 10]]   # a separate image (e.g. finer grid)
+iphone-use screenshot -o f.png [--max-width N] [--grid [--grid-size 24]]   # a separate image (e.g. finer grid)
 iphone-use touch X Y [--image-width W]            # coordinates (screenshot pixels)
 iphone-use text "text" [--enter]                  # just type into the focused field (no list)
 iphone-use wait --stable [-o f.png]
@@ -201,7 +217,9 @@ iphone-use paste "🙂" [--file f] / clipboard [-o backup.txt]
    - If the app is already running, `launch` brings it forward **on whatever screen it was last on.**
      If you need a specific screen, a deep link is the most reliable way there.
 
-   Verified Settings deep links (iOS 26–27):
+   Verified Settings deep links (iOS 26–27). `…` stands for the start of the URL to its left in the same
+   cell, so `…General&path=About` is `prefs:root=General&path=About`, and `…&path=DATE_AND_TIME` is
+   `prefs:root=General&path=DATE_AND_TIME`:
 
    | Screen | URL |
    |---|---|
@@ -223,11 +241,12 @@ iphone-use paste "🙂" [--file f] / clipboard [-o backup.txt]
 
 ## Going back
 
-There is no back command. The back button is at the top left:
+There is no back command. The back button is usually at the top left:
 
 - **It's usually a chevron (‹) followed by the previous screen's name**, like `‹ Settings`. OCR reads
-  the name (`Settings`, often in the first row of the list). Press that line, or `touch --cell` the
-  chevron. Some screens show only the chevron: look at the screenshot.
+  the name (`Settings`, often in the first row of the list). Press that line.
+- **A chevron alone is listed as `[chevron left]`**, wherever it is. Some screens show only the
+  chevron, and the foldable iPhone puts it on a round button at the right edge. Press that line.
 - **Sheets and popups have Close, Cancel or Done instead**, usually at the top. `ui --find Cancel`.
 - **Root screens have none.** In an app with a tab bar, switch tabs, or leave with `home` / `launch`.
 - **A screen in search mode** (e.g. Settings showing search results): press `Cancel` next to the
@@ -265,7 +284,10 @@ Don't swipe from the left edge to go back: the swipe can land on a list row and 
 ## Row-end buttons and toggles
 
 In Settings' Bluetooth and Wi-Fi lists, **pressing a row connects or disconnects.** The device or
-network settings are behind the **ⓘ** at the row's right end. A toggle sits at the right end too.
+network settings are behind the **ⓘ** at the row's right end, listed as `[info circle]` in that
+row. A switch sits at the right end too, listed as `[toggle on|off] <row label>`. Press those lines.
+
+If the button isn't listed, tap the row's right end:
 
 ```
 iphone-use press @t8 --trailing     # taps the right end of @t8's row
@@ -275,8 +297,8 @@ iphone-use press @t8 --trailing     # taps the right end of @t8's row
   screen's right edge, `touch --cell` it instead.
 - **Don't plain-`press` a connected device's row.** It can disconnect or switch the connection. Go in
   through the ⓘ.
-- Check a toggle's state in the screenshot before and after. Changing a toggle changes a setting: get
-  the user's confirmation first.
+- Read a switch's state from its `[toggle …]` line before and after (the result shows it as
+  `changed`). Changing a switch changes a setting: get the user's confirmation first.
 
 ### Buttons revealed by swiping (Delete in Messages, Mail, etc.)
 
@@ -305,9 +327,11 @@ iphone-use press @t32          # → confirmation, if the app asks for one
 - The saved screenshot has a chessboard grid, with column (A, B …) and row (1, 2 …) names along the
   edges and a bold line every 5 cells. **`touch --cell G21`** taps the middle of that cell; to drag,
   `swipe --from C12 --to C4`.
-- A cell is about 43 pt on an iPhone, roughly a fingertip. If the target is smaller than a cell or
-  straddles a cell border, take `screenshot -o f.png --grid --grid-size 20 --max-width 800` and
-  **pass the same `--grid-size` when you tap.**
+- A cell is about 40 pt on every device, roughly a fingertip, so an iPad or an unfolded foldable has
+  more cells than an iPhone. Tapping a cell's center hits a normal button anywhere in it. If the
+  target is small and straddles a cell border, take a finer grid, about twice the columns you see
+  (`screenshot -o f.png --grid --grid-size 24 --max-width 800`), and **pass the same `--grid-size`
+  when you tap.**
 - For spots cells can't hit, use coordinates: `touch X Y --image-width 800`.
   - Coordinates are screenshot pixels. If you read them off a downscaled image, **pass that image's
     width as `--image-width`.**
@@ -332,7 +356,7 @@ iphone-use press @t32          # → confirmation, if the app asks for one
   and so on) on the user's behalf.
   - If the task really needs one, ask the user.
   - If one has to be dismissed, choose "Don't Allow" or "Cancel".
-- If the same action gives "no text changed" twice and the screenshot shows no change, don't repeat
+- If the same action gives "no line changed" twice and the screenshot shows no change, don't repeat
   it. Find another route (a deep link, a different line or cell) or report back.
 
 ## When you finish
@@ -375,4 +399,4 @@ iphone-use press @t32          # → confirmation, if the app asks for one
 | "More than one device" | Add `--udid "name"` |
 | A command times out or says "connection lost" | Try once more. With the daemon running, bypass it with `--no-daemon`, or `daemon --stop` and start it again |
 | All input times out after `hid-info` | Wait a few minutes (that diagnostic briefly stalls the input service; don't call it normally) |
-| The list has only a few lines | The screen is mostly images or icons. Read the screenshot and use `touch --cell` |
+| The list has only a few lines | The screen is mostly images or icons over a photo. Read the screenshot and use `touch --cell` |

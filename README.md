@@ -5,8 +5,9 @@ Wi-Fi. It is not a simulator tool.
 
 It is built for AI agents. `ui` takes a screenshot, reads its text on the Mac with Vision OCR, and
 returns every line as a numbered list, with the screenshot saved next to it under a labelled grid.
-`press @t5` taps line 5 and reports what changed. Icons and toggles are tapped by grid cell
-(`touch --cell G21`).
+Switches and common icons, which have no text, are found by their shape and listed too
+(`[toggle on] Wi-Fi`, `[chevron left]`). `press @t5` taps line 5 and reports what changed. Anything
+else is tapped by grid cell (`touch --cell G21`).
 
 iphone-use runs on the same private stack that Xcode's **Device Hub** uses. It needs no
 entitlements, no `sudo`, no code signing, no app on the device and no WebDriverAgent. It needs only a
@@ -27,13 +28,14 @@ Screenshot: ~/.iphone-use/screen-<udid>.png (grid cells as in the third column; 
 
 $ iphone-use press @t9
 Pressed @t9 "General"
-New screen — 17 text lines
+New screen — 17 lines
 @t1	Settings	A2
 @t2	General	E2
 …
 ```
 
-Each line is the text OCR read, in the device's language, and the grid cell of its center.
+Each line is the text OCR read, in the device's language, or a `[bracketed]` control, and the grid
+cell of its center.
 
 ## Requirements
 
@@ -108,7 +110,7 @@ With more than one device, pass `--udid <UDID or name>` to every command, for ex
 
 | Area | Commands | Notes |
 |---|---|---|
-| Read & act on text | `ui`, `press`, `type`, `home` | OCR text lines with refs (`@tN`) and a gridded screenshot. After each action it waits for the screen to settle and prints a diff. `press` checks the line is still there before tapping, and also has `--hold`, `--trailing` (row-end ⓘ buttons and toggles) and `--swipe` (reveal swipe actions such as Delete). |
+| Read & act on text | `ui`, `press`, `type`, `home` | OCR text lines and shape-detected controls (switch state, SF Symbol icons) with refs (`@tN`), and a gridded screenshot. After each action it waits for the screen to settle and prints a diff. `press` checks the line is still there before tapping, and also has `--hold`, `--trailing` (row-end ⓘ buttons and toggles) and `--swipe` (reveal swipe actions such as Delete). |
 | Apps | `apps`, `launch`, `open` | Launch by display name or bundle ID. Open any URL or deep link. |
 | Device settings | `settings`, `location` | Appearance, text size and accessibility toggles; simulated location. These are the same controls as Device Hub's settings panel. |
 | Screen & coordinates | `screenshot`, `wait`, `touch`, `swipe`, `scroll`, `text`, `key`, `button`, `paste`, `clipboard` | For icons and anything without text. Grid cells let you tap by name instead of guessing pixels. `touch`, `swipe` and `scroll` print the new list too. |
