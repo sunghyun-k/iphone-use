@@ -813,3 +813,22 @@ What the code does now:
 - After an action the new lines are matched to the old ones (same text nearby, same text anywhere,
   then different text in the same spot as `changed`). If fewer than half match, it's a new screen
   and refs restart at 1.
+
+### 49. A video player's controls come late and leave on their own
+
+Tapping a playing video in a media player shows its controls about 0.8 s later (fading in; the tap
+waits out a possible double tap), and they hide again about 3 s after that. The action report waited
+for the screen to settle, and over a playing video that ends either by timeout or by the "only one area
+keeps moving" rule (`ScreenCapture.settled`), somewhere between 1.5 and 6 s. In five tries the report
+saw the controls in about half; `touch --no-ui` followed at once by `ui` saw them in one (too early).
+`touch --no-ui`, one second's pause, then `ui` saw them five times out of five.
+
+Reading the earliest frame that differed most from the settled one, to list text that "showed briefly",
+was tried first and dropped: frames come about 0.35 s apart, so the pick often caught the controls
+halfway through fading (one or two labels readable), and OCR missing a small label in one frame looked
+like the label vanishing.
+
+What the code does now: when the settle reports a moving area or never settles, the report reads the
+frame captured about 1.2 s after the input (`UIScreen.observeAfterAction`, `Settle.early`) and says so.
+Over a screen that settles normally nothing changes. Five tries out of five listed the controls.
+

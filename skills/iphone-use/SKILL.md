@@ -134,6 +134,11 @@ added	@t24	Battery Health	C6
 - **"Same screen — no text changed"**: the text didn't change. Look at the screenshot first: a toggle
   or an icon may have changed. If nothing reacted, don't press the same line again; it's probably a
   label. Press the control next to it (look at the screenshot) or another line.
+- **Over a playing video** the result starts with `(part of the screen keeps moving, like a video: read
+  1.2 s after the input…)`. A player's controls fade in about a second after a tap and hide again a few
+  seconds later, so the list is read while they're up. By your next command they may be gone: if
+  `press` says the line is no longer there, tap the video to bring them back and press right after,
+  chaining with `--no-ui` (`touch --cell F8 --no-ui`, then `press @tN`).
 - **The tap hit a notification banner** if a press near the top opens another app's screen. Don't act
   in that app (it may show private messages); `launch` the app you were in, then `ui`.
 - Add `--no-ui` to act without the result, for example when chaining inputs. Run `ui --wait` afterwards

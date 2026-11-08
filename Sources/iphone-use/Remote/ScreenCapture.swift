@@ -103,6 +103,10 @@ enum ScreenCapture {
     /// What `settled` saw.
     struct Settle {
         let image: CGImage
+        /// The first frames, with seconds since `settled` was called (about two seconds' worth; a
+        /// full-resolution frame is tens of MB). `UIScreen.observeAfterAction` reads one of these when a video
+        /// keeps the screen from settling.
+        var early: [(at: TimeInterval, image: CGImage)]
         /// True if it settled. A screen where only one area keeps moving (`moving`) is also true if the rest settled.
         let stable: Bool
         /// Pixel rect of the area that kept changing after settling (video background, spinner, etc.). nil if none.
@@ -119,16 +123,19 @@ enum ScreenCapture {
     /// video at the top (about a quarter of the screen), so `--shot` waited the full 6 s every time and tagged
     /// "still moving", and `wait --stable` failed outright with a timeout. Screen transitions change almost everything, so they don't match this.
     static func settled(rsd: RemoteServiceDiscovery, timeout: TimeInterval) throws -> Settle {
-        let deadline = Date().addingTimeInterval(timeout)
+        let start = Date()
+        let deadline = start.addingTimeInterval(timeout)
         var previous: [UInt8]?
         var recent: [[Bool]] = []
+        var early: [(at: TimeInterval, image: CGImage)] = []
         while true {
             let image = try self.image(rsd: rsd)
+            if early.count < 6 { early.append((Date().timeIntervalSince(start), image)) }
             let current = try signature(of: image)
             if let previous {
                 let diff = changedCells(previous, current)
                 if diff.filter({ $0 }).count <= diff.count / 400 {
-                    return Settle(image: image, stable: true, moving: nil)
+                    return Settle(image: image, early: early, stable: true, moving: nil)
                 }
                 recent = Array((recent + [diff]).suffix(3))
                 if recent.count == 3,
@@ -137,10 +144,10 @@ enum ScreenCapture {
                     }),
                     box.width * box.height * 3 <= CGFloat(signatureWidth * signatureHeight)
                 {
-                    return Settle(image: image, stable: true, moving: pixelRect(box, in: image))
+                    return Settle(image: image, early: early, stable: true, moving: pixelRect(box, in: image))
                 }
             }
-            if Date() >= deadline { return Settle(image: image, stable: false, moving: nil) }
+            if Date() >= deadline { return Settle(image: image, early: early, stable: false, moving: nil) }
             previous = current
         }
     }

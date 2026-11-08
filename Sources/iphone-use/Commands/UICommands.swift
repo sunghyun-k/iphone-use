@@ -107,7 +107,7 @@ struct PressCommand: ParsableCommand {
                 print("Pressed \(label)")
             }
             if noUi { return }
-            screen.printReport(try screen.observe(try screen.settle()))
+            screen.printReport(try screen.observeAfterAction())
         }
     }
 
@@ -204,7 +204,7 @@ struct TypeCommand: ParsableCommand {
 
             print("Typed\(ref.map { " @t\($0)" } ?? "") ← \"\(text)\"\(enter ? " + Return" : "")")
             if noUi { return }
-            screen.printReport(try screen.observe(try screen.settle()))
+            screen.printReport(try screen.observeAfterAction())
         }
     }
 

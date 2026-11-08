@@ -209,13 +209,41 @@ final class UIScreen {
     func capture() throws -> CGImage { try ScreenText.litImage(rsd: rsd) }
 
     /// Waits until the input reaches the device and the screen settles, and returns the settled frame.
-    func settle() throws -> CGImage {
+    func settle() throws -> CGImage { try settleKeepingEarly().image }
+
+    private func settleKeepingEarly() throws -> ScreenCapture.Settle {
         // If the reaction (press highlight, start of a transition) comes after the first capture, two frames
         // of the pre-input screen are taken as "settled".
-        Thread.sleep(forTimeInterval: 0.3)
-        let image = try ScreenCapture.settled(rsd: rsd, timeout: 6).image
-        guard !ScreenCapture.isDark(image) else { throw ScreenText.Failure.screenOff }
-        return image
+        Thread.sleep(forTimeInterval: Self.reactionDelay)
+        let settle = try ScreenCapture.settled(rsd: rsd, timeout: 6)
+        guard !ScreenCapture.isDark(settle.image) else { throw ScreenText.Failure.screenOff }
+        return settle
+    }
+
+    private static let reactionDelay = 0.3
+
+    /// How long after the input a video player's controls are reliably up: they fade in about 0.8 s after
+    /// a tap and hide again about 3 s later.
+    private static let controlsUp = 1.2
+
+    /// True when the last `observeAfterAction` read the frame at `controlsUp` instead of the settled one.
+    private(set) var readEarly = false
+
+    /// After an action: settles and compares. When part of the screen kept moving (a playing video), the
+    /// frame about 1.2 s after the input is read instead of the settled one. A video player's controls
+    /// appear late and hide on their own, so by the time a playing video counts as settled they were
+    /// usually gone, and the list never showed them (PITFALLS #49).
+    func observeAfterAction() throws -> Report {
+        let settle = try settleKeepingEarly()
+        readEarly = false
+        if settle.moving != nil || !settle.stable,
+            let early = settle.early.first(where: { $0.at + Self.reactionDelay >= Self.controlsUp }),
+            !ScreenCapture.isDark(early.image)
+        {
+            readEarly = true
+            return try observe(early.image)
+        }
+        return try observe(settle.image)
     }
 
     // MARK: - Comparing
@@ -366,6 +394,9 @@ final class UIScreen {
     }
 
     func printReport(_ report: Report) {
+        if readEarly {
+            print("(part of the screen keeps moving, like a video: read 1.2 s after the input, while self-hiding controls are up. They may be gone by your next command: if press says the line moved, tap the video to bring them back and press within a second or two, chaining with --no-ui)")
+        }
         switch report {
         case .newScreen:
             print("New screen — \(state.entries.count) text lines")
@@ -394,7 +425,7 @@ final class UIScreen {
     static func report(afterActionOn udid: String?) {
         do {
             try with(udid: udid) { screen in
-                screen.printReport(try screen.observe(try screen.settle()))
+                screen.printReport(try screen.observeAfterAction())
             }
         } catch {
             print("(could not read the screen: \(error))")
