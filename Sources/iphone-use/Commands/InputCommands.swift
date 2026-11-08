@@ -19,8 +19,11 @@ final class InputSession {
 
     static func open(udid: String?) throws -> InputSession {
         let rsd = try SessionPool.rsd(udid: udid)
-        let screen = try SessionPool.screen(udid: udid, rsd: rsd)
+        // Asked every time, even by the daemon: folding the phone switches panels and sizes (PITFALLS #51).
+        // It costs about 50 ms over a held connection.
+        let screen = try ScreenSize.query(rsd: rsd)
         let hid = try SessionPool.hid(udid: udid, rsd: rsd)
+        hid.touchSurface = screen.touchSurface
         return InputSession(rsd: rsd, hid: hid, screen: screen)
     }
 
@@ -267,7 +270,7 @@ struct ScrollCommand: ParsableCommand {
         let height = session.screen.height
 
         // If the keyboard is up, drag only above it. Passing over keys types characters.
-        let image = try ScreenCapture.image(rsd: session.rsd)
+        let image = try ScreenCapture.image(rsd: session.rsd, screen: session.screen)
         let keyboard = TextRecognizer.keyboardTop(
             in: try TextRecognizer.lines(in: image), height: CGFloat(image.height)
         ).map { Double($0) / Double(image.height) }

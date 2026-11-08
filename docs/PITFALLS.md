@@ -863,3 +863,46 @@ so it is opened only when a button is pressed. Repeated `button home` still does
 double press with the per-command close (#17's 0.8 s wait covers it).
 
 If it shows up again, the next step is the device syslog filtered to `dtuhidd` while a tap fails.
+
+## Foldable iPhone
+
+### 51. The foldable iPhone has two panels, and everything defaulted to the cover one
+
+The foldable iPhone (iOS 27.3) reports two panels in `getdisplayinfo`: `LCD`, the cover panel
+(1398×2034), and `LCD-1`, the inner one (2007×2853). `LCD` is always listed first, even while the
+phone is unfolded, the cover is off and `LCD-1` is the one with `active: true`. Three things followed
+the first panel:
+
+- **Screen size.** `ScreenSize.query` took the first display with a size, so coordinates were scaled
+  for the cover panel.
+- **Screenshots.** `capturescreenshot` without input captures the first panel, which is black while
+  unfolded. It takes a `displayUniqueID` input (the panel's `uniqueId` from `getdisplayinfo`; the
+  host binary's `CaptureScreenshotInput` names it), and an unknown ID fails with "The requested
+  display could not be found".
+- **Touches.** Each panel has its own HID touchscreen: `hid-info` lists surface 257 with the cover
+  panel's `displayUUID` and 258 with the inner one's. Reports sent to 257 while unfolded vanish
+  without an error. We number surfaces from 257 in the panels' `getdisplayinfo` order instead of
+  reading the surface list, because asking for that list stalls HID input for minutes (#15). That
+  order is only observed on this one device.
+
+The inner panel also turns with the UI, unlike the iPhone's single panel so far: held sideways it
+reports `currentOrientation: rot90` while `bounds` stays 2007×2853, and the screenshot comes back
+2853×2007. Touch coordinates stay in the panel's native portrait frame, so a point (u, v) on that
+screenshot is sent as (v, 1−u), the same `rot90` formula as #23 (verified by tapping the Music icon
+in the Dock on the sideways home screen). So the rotation is `nativeOrientation` plus
+`currentOrientation`, and `currentOrientation` of rot90 or rot270 swaps width and height. On the
+iPad the earlier #23 check matches this if its `currentOrientation` was rot0 then; we haven't checked
+an iPad held in another orientation. `rot180` (held upside down: portrait screenshot, `currentOrientation:
+rot180`) hasn't been tapped on hardware.
+
+`bounds` (2007×2853) also differs from `nativeSize` and `frame` (1878×2670) on the inner panel. The
+screenshot matches `bounds`, and touches are normalized, so only the ratio matters.
+
+What the code does now:
+
+- `ScreenSize.query` picks the `active` panel (the first with a size if none is, as when the screen
+  is off) and carries its `uniqueId` and touch surface.
+- Screenshots pass that `displayUniqueID`. `settled` looks the panel up once per wait, not per frame.
+- `InputSession.open` points `HIDService.touchSurface` at the panel's surface.
+- The daemon no longer caches the screen size: folding or turning the phone changes it, and the
+  lookup costs about 50 ms over the daemon's held connection (30 ms to connect, 20 ms for the call).

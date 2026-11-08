@@ -7,14 +7,13 @@ import Foundation
 /// run-once CLI, but as a daemon the cost is paid only once.
 ///
 /// With `keepAlive` off (= a plain CLI run), whatever was borrowed is handed back and closed.
-/// With it on (= daemon), the tunnel and screen size are held and handed out again for the next
-/// request. HID connections are the exception: they are opened and closed per command (PITFALLS #50).
+/// With it on (= daemon), the tunnel is held and handed out again for the next request. HID
+/// connections (PITFALLS #50) and the screen size (PITFALLS #51) are fetched fresh per command.
 enum SessionPool {
     /// Only the daemon turns this on. From then on the tunnel is never closed.
     nonisolated(unsafe) static var keepAlive = false
 
     private nonisolated(unsafe) static var cached: [String: RemoteServiceDiscovery] = [:]
-    private nonisolated(unsafe) static var screenCache: [String: ScreenSize] = [:]
 
     static func rsd(udid: String?) throws -> RemoteServiceDiscovery {
         guard keepAlive else { return try RemoteServiceDiscovery(udid: udid) }
@@ -56,21 +55,9 @@ enum SessionPool {
         hid.close()
     }
 
-    /// Screen size doesn't change unless the device rotates, so it can be cached.
-    static func screen(udid: String?, rsd: RemoteServiceDiscovery) throws -> ScreenSize {
-        guard keepAlive else { return try ScreenSize.query(rsd: rsd) }
-
-        let key = udid ?? ""
-        if let existing = screenCache[key] { return existing }
-        let fresh = try ScreenSize.query(rsd: rsd)
-        screenCache[key] = fresh
-        return fresh
-    }
-
     /// Releases everything held, so the next request opens fresh when a connection has gone bad.
     static func drop() {
         for rsd in cached.values { rsd.close() }
         cached = [:]
-        screenCache = [:]
     }
 }

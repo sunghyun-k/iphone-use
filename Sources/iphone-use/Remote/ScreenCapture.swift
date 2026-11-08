@@ -8,14 +8,20 @@ import UniformTypeIdentifiers
 /// It only reads the screen and doesn't touch it. The device's original is a 16-bit PNG over 10MB (PITFALLS #13).
 enum ScreenCapture {
     /// The PNG bytes exactly as the device sent them.
-    static func png(rsd: RemoteServiceDiscovery) throws -> Data {
+    ///
+    /// Captures the panel that is lit now (`screen`, looked up if not given). Without
+    /// `displayUniqueID` the device captures its first panel, which on the foldable iPhone is the cover
+    /// panel even while it is unfolded, and the image comes back black (PITFALLS #51).
+    static func png(rsd: RemoteServiceDiscovery, screen: ScreenSize? = nil) throws -> Data {
+        let screen = try screen ?? ScreenSize.query(rsd: rsd)
+        var input: [String: XPCObject] = ["requestedFormat": .string("png")]
+        if let id = screen.displayID { input["displayUniqueID"] = .string(id) }
+
         let connection = try rsd.connect(to: "com.apple.coredevice.screencaptureservice")
         defer { connection.close() }
 
         let output = try CoreDeviceService(connection: connection)
-            .invoke(
-                "com.apple.coredevice.feature.capturescreenshot",
-                input: ["requestedFormat": .string("png")], timeout: 30)
+            .invoke("com.apple.coredevice.feature.capturescreenshot", input: input, timeout: 30)
 
         guard let original = XPCObject.dictionary(output).largestData else {
             throw ScreenshotError.noImage(String(describing: output.mapValues { $0.jsonSummary }))
@@ -24,8 +30,8 @@ enum ScreenCapture {
     }
 
     /// Decoded image. Pixel coordinates are `touch` coordinates.
-    static func image(rsd: RemoteServiceDiscovery) throws -> CGImage {
-        try decode(png(rsd: rsd))
+    static func image(rsd: RemoteServiceDiscovery, screen: ScreenSize? = nil) throws -> CGImage {
+        try decode(png(rsd: rsd, screen: screen))
     }
 
     static func decode(_ data: Data) throws -> CGImage {
@@ -128,8 +134,10 @@ enum ScreenCapture {
         var previous: [UInt8]?
         var recent: [[Bool]] = []
         var early: [(at: TimeInterval, image: CGImage)] = []
+        // One panel lookup per wait, not per frame: a fold mid-wait changes everything anyway.
+        let screen = try ScreenSize.query(rsd: rsd)
         while true {
-            let image = try self.image(rsd: rsd)
+            let image = try self.image(rsd: rsd, screen: screen)
             if early.count < 6 { early.append((Date().timeIntervalSince(start), image)) }
             let current = try signature(of: image)
             if let previous {

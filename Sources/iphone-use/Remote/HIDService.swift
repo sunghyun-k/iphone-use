@@ -5,13 +5,13 @@ import Foundation
 /// Uses two RemoteXPC services. Every command opens its own and closes it when done, even in the
 /// daemon (PITFALLS #50).
 /// - `universalhidservice`: plugs **raw HID reports** into HID surfaces the device has already registered.
-///   The main touchscreen is `_ServiceID 257`.
+///   The main touchscreen is `_ServiceID 257`; a second panel (foldable iPhone) has its own at 258.
 /// - `hid.indigo`: hardware button (volume, etc.) state changes.
 ///
 /// **Coordinates are normalized to 0..65535.** Pixels or points passed as-is fall out of range and
 /// are silently dropped — nothing happens on screen, which makes the cause hard to find.
 final class HIDService {
-    /// Main touchscreen surface.
+    /// Main touchscreen surface: the first panel's.
     static let mainTouchscreen: UInt64 = 257
     /// Keyboard surface the device has already registered. No need to create a virtual keyboard.
     static let keyboardSurface: UInt64 = 512
@@ -21,6 +21,10 @@ final class HIDService {
     /// "Contact held" / "released".
     private static let stateContact: UInt8 = 0xC2
     private static let stateRelease: UInt8 = 0x02
+
+    /// Surface touches go to. Each panel has its own touchscreen, and touches sent to an unlit panel's
+    /// surface vanish without an error (PITFALLS #51). Set from `ScreenSize.touchSurface`.
+    var touchSurface = HIDService.mainTouchscreen
 
     private let universal: RemoteXPCConnection
     private let rsd: RemoteServiceDiscovery
@@ -149,10 +153,10 @@ final class HIDService {
 
     private func sendTouch(state: UInt8, x: Int, y: Int) throws {
         try sendReport(
-            surface: Self.mainTouchscreen, report: Self.touchReport(state: state, x: x, y: y))
+            surface: touchSurface, report: Self.touchReport(state: state, x: x, y: y))
     }
 
-    /// 58-byte mainTouchscreen report.
+    /// 58-byte touchscreen report.
     ///
     /// ```
     /// 0     report ID (0x09)
