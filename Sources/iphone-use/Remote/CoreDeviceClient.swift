@@ -54,6 +54,7 @@ final class CoreDeviceClient {
     private let connection: xpc_connection_t
     /// CoreDevice's own identifier for the device (not the UDID).
     private let deviceIdentifier: String
+    private let udid: String
     /// The assertion lasts while this listener lives. Cancelling it hands the tunnel back.
     private var assertionListener: xpc_connection_t?
 
@@ -64,6 +65,7 @@ final class CoreDeviceClient {
         // An XPC service embedded in a framework is only found once that framework is loaded (above).
         connection = xpc_connection_create(Self.serviceName, queue)
         deviceIdentifier = try Self.checkIn(connection, udid: udid, queue: queue)
+        self.udid = udid
         try acquireUsageAssertion()
     }
 
@@ -81,7 +83,25 @@ final class CoreDeviceClient {
     func serviceSocket(_ service: String) throws -> Int32 {
         let input = xpc_dictionary_create(nil, nil, 0)
         xpc_dictionary_set_string(input, "serviceName", service)
-        let output = try invoke("com.apple.coredevice.action.createservicesocket", input: input)
+        let action = "com.apple.coredevice.action.createservicesocket"
+        let output: xpc_object_t
+        do {
+            output = try invoke(action, input: input)
+        } catch Failure.actionFailed(_, let message) where message.contains("not supported") {
+            // The device is connected but its Developer Disk Image isn't mounted ("connected (no DDI)" in
+            // `devicectl list devices`), which happens after a reboot until Xcode touches the device.
+            // Asking devicectl about the DDI services mounts it; then the same call works (PITFALLS #55).
+            _ = try? DeviceCtl.run(["device", "info", "ddiServices", "--device", udid, "-q"], timeout: 90)
+            do {
+                output = try invoke(action, input: input)
+            } catch Failure.actionFailed(_, let message) where message.contains("not supported") {
+                throw Failure.actionFailed(action: action, message: """
+                    \(message) The device's Developer Disk Image is probably not mounted, so there is no \
+                    connection to its services yet. Run `xcrun devicectl device info ddiServices --device \
+                    \(udid)` (or open the device in Xcode), then try again.
+                    """)
+            }
+        }
         guard let descriptor = xpc_dictionary_get_value(output, "fileDescriptor"),
             xpc_get_type(descriptor) == XPC_TYPE_FD
         else { throw Failure.noSocket(service) }

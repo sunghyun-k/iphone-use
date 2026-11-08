@@ -1018,3 +1018,28 @@ Buttons go through `hid.indigo` and don't wait.
 
 The losses that led here were on the foldable's cover panel, right after a fresh daemon or an `open`:
 moments when the device was busy.
+
+## Device state
+
+### 55. A device without its Developer Disk Image refuses every service socket
+
+After a reboot an iPad on Wi-Fi showed up as `connected (no DDI)` in `xcrun devicectl list devices`,
+and every command failed with "The capability “Create Service Socket” is not supported by this
+device". Pairing, the tunnel and the device itself were fine; the screenshot and HID services live on
+the Developer Disk Image, which Xcode mounts the first time it touches the device. Until then
+CoreDevice reports the socket action as unsupported rather than missing.
+
+Any `devicectl` query that needs the DDI mounts it as a side effect (`device info processes` did, in
+a few seconds). What the code does: when `createservicesocket` fails with "not supported",
+`CoreDeviceClient.serviceSocket` runs `devicectl device info ddiServices` once and retries; if it
+still fails, the error says to mount the DDI and contains "connection" so the daemon drops its
+session (`DaemonCommand.swift`).
+
+### 56. An iPad's status clock carries the date, and its VPN badge reads as "{} VPN"
+
+The status filter (#48) finds the clock by matching the Mac's time exactly ("3:00"). An iPad's status
+bar shows "3:00 PM Sun Nov 8" (localized), which OCR returns as one line, so it stayed in the list as
+the first line; the VPN badge at the far right, nowhere near the clock, came out as "{} VPN" or
+"() VPN" and stayed too. The filter now also takes a short line in the top 5% of the screen with the
+current time as one of its words, and treats a short line whose letters are "VPN" as a status item
+(still only at the very top or next to the clock, so a Settings row named VPN stays).

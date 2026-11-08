@@ -185,7 +185,13 @@ final class UIScreen {
 
     /// Where the status clock is (one, or none if it's hidden or misread).
     private static func statusClocks(_ lines: [TextRecognizer.Line], height: CGFloat) -> [CGRect] {
-        lines.filter { $0.frame.midY < height * 0.3 && showsClock($0.text) }.map(\.frame)
+        lines.filter { line in
+            if line.frame.midY < height * 0.3 && showsClock(line.text) { return true }
+            // An iPad puts the date next to the clock and OCR reads both as one line ("9:41 Mon Jun 9").
+            // Only at the very top: lower down, a line holding the current time is content (an alarm). PITFALLS #56.
+            return line.frame.midY < height * 0.05 && line.text.count <= 30
+                && line.text.split(separator: " ").contains { showsClock(String($0)) }
+        }.map(\.frame)
     }
 
     /// Within four clock-heights of the clock: the rest of the status items.
@@ -211,6 +217,8 @@ final class UIScreen {
     /// Battery ("80%", "80+" for the charging bolt), carrier ("5G", "LTE") or signal dots ("::;").
     private static func statusLike(_ text: String) -> Bool {
         let text = text.trimmingCharacters(in: .whitespaces)
+        // The VPN badge; its bracket glyph comes out as "{}" or "()" (PITFALLS #56).
+        if text.filter({ $0.isLetter }).uppercased() == "VPN" && text.count <= 6 { return true }
         guard !text.isEmpty, text.count <= 5 else { return false }
         if ["5G", "5G+", "5GE", "5G UC", "LTE", "4G", "3G", "SOS"].contains(text.uppercased()) { return true }
         return text.allSatisfy { $0.isNumber || ":;.,%+ ".contains($0) }
