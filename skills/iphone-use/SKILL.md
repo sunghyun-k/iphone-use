@@ -51,7 +51,7 @@ iphone-use ui                          # always look at the current screen first
 ```
 
 - With more than one device, **pass `--udid` to every command.** `daemon` is the exception: one
-  daemon serves all devices. The value can be a UDID or a name from `devices`. It can go before or
+  daemon serves all devices (`daemon --udid` is accepted and ignored). The value can be a UDID or a name from `devices`. It can go before or
   after the subcommand: `iphone-use ui --udid "Home iPad"`. If you leave it out, the command fails and
   lists the candidates.
 - The device must be **unlocked with the screen on**. If a command says "The screen is off", wake it
@@ -83,6 +83,8 @@ iphone-use type @t2 "Battery" # tap the field (here its placeholder text) and ty
 **How to read a line**
 
 - Each line is `@tN<TAB>text<TAB>grid cell`, top to bottom and left to right within a row.
+- A row's label and its value often come out as separate lines with the same row in their cells
+  (`iOS Version	B4`, then `27.3 >	H4`). Pair them by row.
 - The text is **what OCR read**, in the device's language. It can be slightly off (a misread letter,
   a symbol for an icon). Pick by meaning, not exact spelling.
 - The grid cell is where the line's center is on the saved screenshot.
