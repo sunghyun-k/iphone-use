@@ -10,7 +10,7 @@ struct IPhoneUse: ParsableCommand {
             CoreDevice stack Xcode's Device Hub uses. Needs no entitlements, no sudo and no app on the device, \
             but the device must be paired and trusted.
             """,
-        version: "0.4.0",
+        version: "0.5.0",
         subcommands: [
             // Read the screen's text and act on it (the default)
             UICommand.self, PressCommand.self, TypeCommand.self, HomeCommand.self,
