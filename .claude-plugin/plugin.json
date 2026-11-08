@@ -1,7 +1,7 @@
 {
   "name": "iphone-use",
   "version": "0.3.1",
-  "description": "See and operate a real iPhone or iPad over USB or Wi-Fi through its accessibility list: ui, press, type, back, screenshots and more.",
+  "description": "See and operate a real iPhone or iPad over USB or Wi-Fi: OCR text lists with gridded screenshots (ui), press, type, touch by grid cell and more.",
   "author": { "name": "Sunghyun Kim" },
   "homepage": "https://github.com/sunghyun-k/iphone-use",
   "repository": "https://github.com/sunghyun-k/iphone-use",

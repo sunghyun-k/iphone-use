@@ -96,6 +96,9 @@ struct TouchCommand: ParsableCommand {
     @OptionGroup var device: DeviceOptions
     @OptionGroup var shot: ShotOptions
 
+    @Flag(name: .long, help: "Don't read the screen (ui) afterwards.")
+    var noUi = false
+
     @Argument(help: "X coordinate (screenshot pixels).")
     var x: Double?
 
@@ -143,6 +146,7 @@ struct TouchCommand: ParsableCommand {
         }
         print("Tapped \(cell.map { "\($0.uppercased()) " } ?? "")(\(Int(x)), \(Int(y)))")
         try shot.capture(after: session, udid: device.udid)
+        if !noUi { UIScreen.report(afterActionOn: device.udid) }
     }
 }
 
@@ -159,6 +163,9 @@ struct SwipeCommand: ParsableCommand {
 
     @OptionGroup var device: DeviceOptions
     @OptionGroup var shot: ShotOptions
+
+    @Flag(name: .long, help: "Don't read the screen (ui) afterwards.")
+    var noUi = false
 
     @Argument(help: "Start X.") var x1: Double?
     @Argument(help: "Start Y.") var y1: Double?
@@ -208,6 +215,7 @@ struct SwipeCommand: ParsableCommand {
             duration: duration)
         print("Swiped (\(Int(start.x)), \(Int(start.y))) -> (\(Int(end.x)), \(Int(end.y)))")
         try shot.capture(after: session, udid: device.udid)
+        if !noUi { UIScreen.report(afterActionOn: device.udid) }
     }
 }
 
@@ -229,6 +237,9 @@ struct ScrollCommand: ParsableCommand {
 
     @OptionGroup var device: DeviceOptions
     @OptionGroup var shot: ShotOptions
+
+    @Flag(name: .long, help: "Don't read the screen (ui) afterwards.")
+    var noUi = false
 
     @Argument(help: "Direction: up, down, left, right.")
     var direction: Direction
@@ -290,6 +301,7 @@ struct ScrollCommand: ParsableCommand {
         }
         print("Scrolled \(direction.rawValue)")
         try shot.capture(after: session, udid: device.udid)
+        if !noUi { UIScreen.report(afterActionOn: device.udid) }
     }
 }
 
@@ -536,7 +548,7 @@ struct KeyCommand: ParsableCommand {
         help: "Key name. Join modifiers with +, like `ctrl+space`. A single character types that character.")
     var key: String
 
-    @Flag(name: .long, help: "Don't fetch the accessibility list (ui) after the key press.")
+    @Flag(name: .long, help: "Don't read the screen (ui) after the key press.")
     var noUi = false
 
     func run() throws {

@@ -62,7 +62,7 @@ struct LaunchCommand: ParsableCommand {
     @Flag(name: .long, help: "If it's already running, kill it and launch fresh.")
     var restart = false
 
-    @Flag(name: .long, help: "Don't fetch the accessibility list (ui) after launching.")
+    @Flag(name: .long, help: "Don't read the screen (ui) after launching.")
     var noUi = false
 
     func run() throws {
@@ -96,7 +96,7 @@ struct OpenCommand: ParsableCommand {
     @Option(name: .long, help: "Hand the URL to this app (bundle ID or name). If omitted, the system picks.")
     var app: String?
 
-    @Flag(name: .long, help: "Don't fetch the accessibility list (ui) after opening.")
+    @Flag(name: .long, help: "Don't read the screen (ui) after opening.")
     var noUi = false
 
     func run() throws {

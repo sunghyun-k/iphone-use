@@ -5,8 +5,7 @@ import UniformTypeIdentifiers
 
 /// Screen capture. `com.apple.coredevice.screencaptureservice` — the same path Device Hub uses.
 ///
-/// It doesn't open an accessibility session, so it doesn't collide with Accessibility Inspector, and
-/// unlike `scan` it doesn't touch the screen. The device's original is a 16-bit PNG over 10MB (PITFALLS #13).
+/// It only reads the screen and doesn't touch it. The device's original is a 16-bit PNG over 10MB (PITFALLS #13).
 enum ScreenCapture {
     /// The PNG bytes exactly as the device sent them.
     static func png(rsd: RemoteServiceDiscovery) throws -> Data {
@@ -176,12 +175,23 @@ enum ScreenCapture {
     /// grid and only around the element, and a chat list scrolled by a row and a half still passed it:
     /// neighboring rows look alike at that resolution (PITFALLS #42).
     static func sameArea(_ a: CGImage, _ b: CGImage, in rect: CGRect) -> Bool {
-        let bounds = rect.intersection(CGRect(x: 0, y: 0, width: a.width, height: a.height)).integral
-        guard !bounds.isEmpty, a.width == b.width, a.height == b.height,
-            let pixelsA = gray(a, bounds), let pixelsB = gray(b, bounds)
-        else { return false }
-        let changed = zip(pixelsA, pixelsB).filter { abs(Int($0) - Int($1)) > 32 }.count
-        return changed * 25 <= pixelsA.count
+        guard a.width == b.width, a.height == b.height, let pixels = areaPixels(a, in: rect) else { return false }
+        return sameArea(pixels, b, in: rect)
+    }
+
+    /// `sameArea` against pixels kept from an earlier frame (`areaPixels`), so the frame itself needn't be
+    /// kept between commands.
+    static func sameArea(_ pixels: [UInt8], _ image: CGImage, in rect: CGRect) -> Bool {
+        guard let now = areaPixels(image, in: rect), now.count == pixels.count, !now.isEmpty else { return false }
+        let changed = zip(pixels, now).filter { abs(Int($0) - Int($1)) > 32 }.count
+        return changed * 25 <= pixels.count
+    }
+
+    /// The grayscale pixels `sameArea` compares, for `rect` clipped to the image.
+    static func areaPixels(_ image: CGImage, in rect: CGRect) -> [UInt8]? {
+        let bounds = rect.intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height)).integral
+        guard !bounds.isEmpty else { return nil }
+        return gray(image, bounds)
     }
 
     private static func gray(_ image: CGImage, _ rect: CGRect) -> [UInt8]? {

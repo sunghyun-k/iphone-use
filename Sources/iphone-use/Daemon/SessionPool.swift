@@ -15,7 +15,6 @@ enum SessionPool {
     private nonisolated(unsafe) static var cached: [String: RemoteServiceDiscovery] = [:]
     private nonisolated(unsafe) static var hidCache: [String: HIDService] = [:]
     private nonisolated(unsafe) static var screenCache: [String: ScreenSize] = [:]
-    private nonisolated(unsafe) static var axCache: [String: AXSession] = [:]
 
     static func rsd(udid: String?) throws -> RemoteServiceDiscovery {
         guard keepAlive else { return try RemoteServiceDiscovery(udid: udid) }
@@ -72,23 +71,8 @@ enum SessionPool {
         return fresh
     }
 
-    /// Accessibility session the daemon holds on to (`AXSession(services:)`). nil if it can't be opened — the caller takes the normal path.
-    static func axSession(udid: String) -> AXSession? {
-        guard keepAlive else { return nil }
-        if let existing = axCache[udid] { return existing }
-        guard let rsd = try? rsd(udid: udid), let fresh = try? AXSession(services: rsd) else { return nil }
-        axCache[udid] = fresh
-        return fresh
-    }
-
-    static func dropAX(udid: String) {
-        axCache.removeValue(forKey: udid)?.close()
-    }
-
     /// Releases everything held, so the next request opens fresh when a connection has gone bad.
     static func drop() {
-        for session in axCache.values { session.close() }
-        axCache = [:]
         for hid in hidCache.values { hid.close() }
         for rsd in cached.values { rsd.close() }
         hidCache = [:]

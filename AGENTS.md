@@ -34,8 +34,9 @@ The rules that bite first. Details are in the sections below.
 
 ## What this is
 
-A CLI built by reverse-engineering the private stack behind Xcode's Device Hub and Accessibility
-Inspector. There is no public API, so **observation, not documentation, is the source of truth.**
+A CLI built by reverse-engineering the private stack behind Xcode's Device Hub. It reads the screen
+from screenshots with OCR on the Mac and sends touches and keys over HID. There is no public API, so
+**observation, not documentation, is the source of truth.**
 [`docs/PITFALLS.md`](docs/PITFALLS.md) records why things are the way they are, as numbered entries
 that code comments cite as `PITFALLS #N`. **Read the relevant entry before "fixing" code that looks
 odd.** Most of those spots have already burned someone once.
@@ -59,15 +60,12 @@ Sources/iphone-use/
   Commands/          One file per subcommand (keep them thin; logic lives below)
   Remote/            CoreDevice path: service sockets, RemoteXPC, HID, screenshots, clipboard
   Daemon/            Resident mode: connection reuse + Unix-socket RPC
-  AXSession.swift    Accessibility path: DTX session (kept open by the daemon)
-  AXWire.swift       axAuditDaemon wire format (wrapping/unwrapping envelopes)
-  AXWalker.swift     Moving focus + measuring element rects from the green focus box
-  UIScreen.swift     Basis of ui/press/type: @e ref lists, walking to an element, post-action diff
-  TextRecognizer.swift  Screenshot OCR (Vision). Only detects whether the on-screen keyboard is up; never picks targets
+  UIScreen.swift     Basis of ui/press/type: OCR line lists with @t refs, finding a line again, post-action diff
+  TextRecognizer.swift  Screenshot OCR (Vision) and on-screen keyboard detection
   ScreenGrid.swift   Named grid for screenshot --grid and cell math for touch/swipe --cell
   HangulKeys.swift   Hangul -> Dubeolsik key positions (text/type)
 Sources/CMobileDevice/  C bindings for MobileDevice.framework
-Sources/CDTXBridge/     Objective-C bridge to DTXConnectionServices
+Sources/CDTXBridge/     Objective-C bridge to DTXConnectionServices (Instruments, to revive a stuck launch daemon)
 skills/iphone-use/SKILL.md          Agent-facing usage guide (see "Skill changes")
 skills/iphone-use/scripts/iphone-use  Wrapper that finds or builds the CLI (see "Distribution")
 bin/iphone-use          Claude Code puts a plugin's bin/ on PATH; forwards to the wrapper
@@ -76,14 +74,10 @@ scripts/release.sh      Cuts a release (see "Releasing")
 docs/PITFALLS.md        Numbered reverse-engineering notes and dead ends
 ```
 
-The two paths are **independent**:
-
-- Screen and input go through RemoteXPC, over sockets that CoreDeviceService hands out
-  (`CoreDeviceClient`).
-- Accessibility goes through a lockdown service plus DTX. Over USB it is opened via MobileDevice;
-  over Wi-Fi it goes through `.shim.remote` inside the tunnel.
-
-Changing one path doesn't touch the other.
+Screen capture and input go through RemoteXPC, over sockets that CoreDeviceService hands out
+(`CoreDeviceClient`). Lockdown services (`installation_proxy`) are opened via MobileDevice over USB and
+through `.shim.remote` inside the tunnel over Wi-Fi. Reading the text happens on the Mac
+(`TextRecognizer`), so the device never sees it.
 
 Device-specific traps:
 
@@ -183,8 +177,6 @@ on it.
   can't restore something, say so.
 - **Never call `DisplayService.stop_all_streams` or anything like it.** It wedges the device's media
   daemon until a reboot. Media streams aren't needed at all.
-- **Never overlap focus moves** (`scan`, `ui`, `press`). Overlapping moves break the AX daemon for the
-  rest of the session. One at a time.
 - **Don't record private data you see on screen** (message previews, codes, account details)
   anywhere, including chat.
 - **Destructive actions** (delete, send, report, purchase) only when the owner explicitly names the
@@ -208,8 +200,8 @@ change a command or that document:
   one.
 - **Commands that must not go through the daemon** are listed in `DaemonClient.localOnly`.
 - **While debugging, bypass the daemon** with `--no-daemon` or `IPHONE_USE_NO_DAEMON=1`.
-- **Debug environment variables:** `IU_DTX_DEBUG=1` dumps DTX messages; `IU_DTX_TEE=1` logs raw
-  socket byte counts.
+- **Debug environment variable:** `IU_DTX_DEBUG=1` dumps DTX messages (Instruments, used by `launch`
+  recovery).
 - **You don't need to restart it after a rebuild.** Requests carry the client's build stamp, and a
   stale daemon exits (PITFALLS #28).
 
@@ -305,5 +297,5 @@ When you learn something by observation that the code depends on:
   - newly added `IU_*` debug environment variables
   - temporary subcommands
 
-  `IU_DTX_DEBUG` and `IU_DTX_TEE` are documented features and stay.
+  `IU_DTX_DEBUG` is a documented feature and stays.
 - **Don't commit** screenshots, device logs, or anything captured from a personal device.

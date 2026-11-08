@@ -2,266 +2,133 @@ import ArgumentParser
 import CoreGraphics
 import Foundation
 
-/// Takes the accessibility elements on the current screen, with refs.
+/// Reads the current screen's text with refs, and saves the screenshot next to it.
 struct UICommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "ui",
-        abstract: "Print the current screen's elements with @e refs, 20 at a time (accessibility name, value, traits).",
+        abstract: "Read the text on the screen as a list of @t refs, and save the screenshot with a grid.",
         discussion: """
-            Each line is `@eN<TAB>description`. A description looks like "name, value, traits"
-            (e.g. "Wi-Fi, HomeWiFi, Button"). Pass the ref to press / type. The list runs top to bottom and
-            includes off-screen elements (pressing scrolls to them). The screen may scroll a little while sweeping.
-            On the same screen refs stay the same. When the screen changes, numbering restarts at 1.
+            Each line is `@tN<TAB>text<TAB>grid cell`, top to bottom. Pass the ref to press / type. Only what's
+            on screen is listed; scroll to see more. Icons and toggles have no text: look at the saved
+            screenshot and use touch --cell. On the same screen refs stay the same; on a new screen numbering
+            restarts at 1.
             """
     )
 
     @OptionGroup var device: DeviceOptions
 
-    @Flag(name: .long, help: "Continue with the next 20.")
-    var more = false
-
-    @Flag(name: .long, help: "Start from the last element and sweep backward, for screens that sit at their end, like a chat: lists the newest messages and the input field without scrolling to the top. --more then continues with earlier elements.")
-    var last = false
-
-    @Option(name: .long, help: "Sweep until an element whose description contains this text appears (up to 100), and print only the matches. With --more, search the next 100.")
+    @Option(name: .long, help: "Print only the lines containing this text (case-insensitive).")
     var find: String?
+
+    @Flag(name: .long, help: "Wait for the screen to settle first (after a change you made with --no-ui or by hand).")
+    var wait = false
 
     func run() throws {
         try UIScreen.with(udid: device.udid) { screen in
-            if let find {
-                // Finding elements at the end of the list, like the bottom search bar (iOS 26+) or a close
-                // button, used to take several --more calls; this makes it one. With --more it searches on
-                // past the end of the current list.
-                let continuing = more && !screen.state.entries.isEmpty && !screen.state.anchoredAtEnd
-                if !continuing {
-                    // Keeps the direction: re-listing a chat from the top would scroll it (PITFALLS #47).
-                    _ = try screen.observe(limit: UIScreen.page)
-                    screen.state.shown = min(UIScreen.page, screen.state.entries.count)
-                }
-                let (hits, stopped) = try screen.find(find, continuing: continuing)
-                print(screen.header)
-                let count = screen.state.entries.count
-                if hits.isEmpty, screen.state.anchoredAtEnd {
-                    print("(no element contains \"\(find)\" in the \(count) listed from the end. Searching from the top would scroll this screen back through its history; ui --more lists earlier elements)")
-                } else if hits.isEmpty, stopped {
-                    print("(no element contains \"\(find)\" in the first \(count) — ui --find \"\(find)\" --more searches the next \(UIScreen.findLimit))")
-                } else if hits.isEmpty {
-                    print("(no element contains \"\(find)\" — checked all \(count) in the list)")
-                } else {
-                    for entry in hits { print("@e\(entry.ref)\t\(UIScreen.caption(entry))") }
-                }
+            let image = wait ? try screen.settle() : try screen.capture()
+            // Matched against the last list, so refs from it stay valid on the same screen; the whole list
+            // is printed either way.
+            _ = try screen.observe(image)
+            guard let find else {
+                print("\(screen.state.entries.count) text lines")
+                screen.printList(screen.state.entries)
                 return
             }
-            if more {
-                let slice = try screen.more()
-                if slice.isEmpty {
-                    print("(end — nothing more)")
-                } else {
-                    screen.printPage(slice)
-                }
-                return
+            let hits = screen.state.entries.filter { $0.text.localizedCaseInsensitiveContains(find) }
+            print("\(hits.count) of \(screen.state.entries.count) text lines contain \"\(find)\"")
+            if hits.isEmpty {
+                print("(not on this screen — look at the screenshot, or scroll and run ui again)")
             }
-            _ = try screen.observe(limit: UIScreen.page, fromEnd: last)
-            screen.state.shown = min(UIScreen.page, screen.state.entries.count)
-            print(screen.header)
-            if last, !screen.state.anchoredAtEnd {
-                print("(this screen can't be swept from the end — listed from the start)")
-            }
-            screen.printPage(screen.firstPage)
+            for entry in hits { print(screen.line(entry)) }
+            print(screen.imageNote)
         }
     }
 }
 
-/// `@e12` -> 12.
+/// `@t12` -> 12.
 func parseRef(_ text: String) throws -> Int {
-    let body = text.hasPrefix("@e") ? text.dropFirst(2) : text.hasPrefix("e") ? text.dropFirst() : Substring(text)
+    var body = Substring(text)
+    if body.hasPrefix("@") { body = body.dropFirst() }
+    if body.hasPrefix("t") { body = body.dropFirst() }
     guard let ref = Int(body), ref > 0 else { throw UIError.badRef(text) }
     return ref
 }
 
-/// Presses an element.
+/// Presses a text line.
 struct PressCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "press",
-        abstract: "Press an element from the ui list (@eN) and report how the screen changed.",
+        abstract: "Tap a text line from the ui list (@tN) and report how the screen changed.",
         discussion: """
-            Moves focus to the element, measures it, and taps there. Off-screen elements are scrolled to first.
-            Once the screen settles, reports the result:
+            Checks that the line is still where ui read it, then taps its center. If it moved, it's found again
+            by its text; if it's gone, nothing is pressed. Once the screen settles, reports the result:
               a new screen gives a new list (refs from 1),
-              the same screen gives only changed (value/state changed) / added / removed. Refs stay the same.
-            If the screen changed since the list was taken, fails without pressing — run ui again.
+              the same screen gives only changed / added / removed lines. Refs stay the same.
             """
     )
 
     @OptionGroup var device: DeviceOptions
 
-    @Argument(help: "Ref of the element to press (@e12).")
+    @Argument(help: "Ref of the line to press (@t12).")
     var ref: String
 
     @Option(name: .long, help: "How long to hold, in seconds. 0.6 or more for a long press.")
     var hold: Double = 0.08
 
-    @Option(name: .long, help: "Press the row's action button instead of the row (a name from [actions: …] in the list). Currently only ⓘ (\"More Info\") works.")
-    var action: String?
-
-    @Flag(name: .long, help: "Press the right end of the element instead of its center (for buttons like a row's trailing ⓘ that aren't separate elements).")
+    @Flag(name: .long, help: "Tap the right end of the line's row instead (a row's trailing ⓘ, a chevron, a toggle).")
     var trailing = false
 
-    @Option(name: .long, help: "Instead of pressing, swipe inside the element to reveal hidden buttons: left (right-side buttons, e.g. Delete) / right (left-side buttons).")
+    @Option(name: .long, help: "Instead of pressing, swipe the line's row to reveal hidden buttons: left (right-side buttons, e.g. Delete) / right (left-side buttons).")
     var swipe: SwipeSide?
 
     enum SwipeSide: String, ExpressibleByArgument { case left, right }
 
-    @Flag(name: .long, help: "Don't take the list again after pressing.")
+    @Flag(name: .long, help: "Don't read the screen again after pressing.")
     var noUi = false
-
-    @Flag(name: .long, help: "Take the list after pressing from the end, like ui --last (for opening a chat).")
-    var last = false
 
     func run() throws {
         let ref = try parseRef(ref)
         try UIScreen.with(udid: device.udid) { screen in
-            if let head = screen.state.head, head.ref == ref {
-                // The first element of a list taken from the end: jump there instead of walking through
-                // the chat (PITFALLS #47).
-                let item = try screen.goHead()
-                try tap(try screen.measure(item), udid: device.udid, hold: hold)
-                print("Pressed @e\(ref) \(UIScreen.oneLine(item.caption))")
-                if noUi { return }
-                try screen.settle()
-                screen.printReport(try screen.observe(limit: UIScreen.page, fromEnd: last ? true : nil))
-                return
-            }
-            let position = try screen.position(of: ref)
-            if screen.state.entries[position].revealed == true {
-                // Revealed button: don't walk; tap the rect measured at swipe time (walking can move the list
-                // and close it). If it already closed, that rect is the row itself and opens the chat — a new
-                // screen in the result means that happened.
-                let entry = screen.state.entries[position]
-                guard let rect = entry.tapCGRect else { throw UIError.revealLost }
-                try tap(rect, udid: device.udid, hold: hold)
-                print("Pressed @e\(ref) \(UIScreen.caption(entry))")
-                if noUi { return }
-                try screen.settle()
-                screen.printReport(try screen.observe(limit: screen.batchLimit(position)))
-                return
-            }
-            let item = try screen.go(to: position)
-            if let action {
-                // Performing the action through accessibility (`performAction`) is silently ignored by the
-                // device (PITFALLS #35). Instead we tap where the action's button is. The only one whose
-                // position we know is UIKit's ⓘ — its selector is `_accessibilityHandleDetailButtonPress:`
-                // and it's always at the row's right end (Bluetooth rows). "More Info" on Wi-Fi rows is
-                // attached as a block with no selector (`Selector:(null)`), so it can't be told apart from
-                // other actions like Delete — the caller looks and presses it with --trailing.
-                guard let found = item.actions.first(where: { $0.name == action })
-                    ?? item.actions.first(where: { $0.name.localizedCaseInsensitiveContains(action) })
-                else { throw UIError.noAction(action, available: item.actions.map(\.name)) }
-                guard found.attribute.contains("_accessibilityHandleDetailButtonPress:") else {
-                    throw UIError.actionNotTappable(found.name, ref: ref)
+            let entry = try screen.entry(ref)
+            let (rect, moved) = try screen.locate(entry)
+            let width = Double(screen.state.width), height = Double(screen.state.height)
+            let label = "@t\(ref) \"\(entry.text)\"\(moved ? " (it had moved; found it again by its text)" : "")"
+            if let swipe {
+                guard rect.midY > height * 0.12, rect.midY < height * 0.85 else {
+                    throw UIError.rowNotSwipeable(entry.text)
                 }
-                try tap(Self.trailing(of: try screen.measure(item)), udid: device.udid, hold: hold)
-                print("Pressed @e\(ref) \(found.name)(ⓘ) — \(UIScreen.oneLine(item.caption))")
-            } else if let swipe {
-                let row = try Self.swipeableRow(item, at: position, screen: screen, udid: device.udid)
-                try Self.reveal(in: row, toward: swipe, udid: device.udid)
-                print("Swiped \(swipe.rawValue) @e\(ref) — \(UIScreen.oneLine(item.caption))")
-                if noUi { return }
-                try screen.settle()
-                let found = try screen.probeRevealed(after: position, row: row)
-                if found.isEmpty {
-                    print("Found no revealed buttons (the row didn't slide, or the buttons aren't in the list). Try a long press (press @e\(ref) --hold 0.8).")
-                } else {
-                    print("\(found.count) revealed button(s) — press right away (they close if another command scrolls the list):")
-                    for revealed in found {
-                        let place = revealed.entry.tapRect == nil
-                            ? "\t(could not measure the element — can't press)"
-                            : revealed.fromRight.map { "\t(#\($0) from the row's right end)" } ?? ""
-                        print("added\t@e\(revealed.entry.ref)\t\(UIScreen.caption(revealed.entry))\(place)")
-                    }
-                }
-                return
+                try Self.reveal(atY: rect.midY, width: width, toward: swipe, udid: device.udid)
+                print("Swiped \(swipe.rawValue) the row of \(label)")
             } else if trailing {
-                try tap(Self.trailing(of: try screen.measure(item)), udid: device.udid, hold: hold)
-                print("Pressed @e\(ref) right end — \(UIScreen.oneLine(item.caption))")
+                try tap(Self.trailing(rowAt: rect, width: width), udid: device.udid, hold: hold)
+                print("Pressed the right end of the row of \(label)")
             } else {
-                let rect = try screen.measure(item)
                 try tap(rect, udid: device.udid, hold: hold)
-                print("Pressed @e\(ref) \(UIScreen.oneLine(item.caption))")
+                print("Pressed \(label)")
             }
             if noUi { return }
-            try screen.settle()
-            let limit = screen.batchLimit(position)
-            screen.printReport(try screen.observe(limit: limit, fromEnd: last ? true : nil))
+            screen.printReport(try screen.observe(try screen.settle()))
         }
     }
 
-    /// A row rect that's safe to swipe. If it's near the top/bottom bar, drag the row toward the middle and
-    /// measure again.
-    ///
-    /// When a row overlaps the bottom tab bar (in a messenger app) or the top navigation bar, the box is
-    /// covered and the rect is measured wrong, and swiping there opens the neighboring row (trying to swipe
-    /// a channel chat opened the private chat row below it). Dragging is fine because it happens **before**
-    /// the buttons are revealed. If it still doesn't look like a row after moving, don't swipe.
-    static func swipeableRow(
-        _ item: AXWalker.Item, at position: Int, screen: UIScreen, udid: String?
-    ) throws -> CGRect {
-        let size: (width: Double, height: Double)
-        do {
-            let input = try InputSession.open(udid: udid)
-            defer { input.close() }
-            size = (input.screen.width, input.screen.height)
-        }
-        func fits(_ row: CGRect) -> Bool {
-            row.height >= size.height * 0.03 && row.width >= size.width * 0.5
-                && row.minY >= size.height * 0.12 && row.maxY <= size.height * 0.85
-        }
-        let first = try? screen.measure(item)
-        if let first, fits(first) { return first }
-
-        // Drag toward the middle (45%). If it couldn't be measured, the row is usually under the bottom bar,
-        // so move it up a bit.
-        let target = size.height * 0.45
-        let delta = max(-size.height * 0.35, min(size.height * 0.35, (first?.midY ?? size.height * 0.8) - target))
-        do {
-            let input = try InputSession.open(udid: udid)
-            defer { input.close() }
-            let startY = size.height * 0.55
-            try input.hid.swipe(
-                from: input.normalized(size.width * 0.5, startY),
-                to: input.normalized(size.width * 0.5, startY - delta), duration: 0.5, holdAtEnd: 0.2)
-        }
-        try screen.settle()
-        // Step to a neighbor and back so the box is redrawn. If we don't land back on that row, the list is
-        // out of sync.
-        _ = try screen.walker.move(.next)
-        guard let back = try screen.walker.move(.previous),
-            back.hex == item.hex || back.caption == item.caption
-        else { throw UIError.stale }
-        let again = try? screen.measure(back)
-        guard let row = again, fits(row) else { throw UIError.rowNotSwipeable(item.caption) }
-        return row
-    }
-
-    /// Swipes only 35% of the row width inside the row, just enough to reveal the buttons. A full swipe
-    /// **triggers the first button immediately** — in Messages it deletes the conversation. So push short and
-    /// slow. The outer 4px are system gestures, so start 10% inside the row.
-    static func reveal(in row: CGRect, toward side: SwipeSide, udid: String?) throws {
+    /// Swipes only 35% of the screen width, just enough to reveal the buttons. A full swipe **triggers the
+    /// first button immediately** — in Messages it deletes the conversation. So push short and slow. The
+    /// outer 4px are system gestures, so start 10% inside.
+    static func reveal(atY y: Double, width: Double, toward side: SwipeSide, udid: String?) throws {
         let input = try InputSession.open(udid: udid)
         defer { input.close() }
-        let near = row.width * 0.1, travel = row.width * 0.35
-        let startX = side == .left ? row.maxX - near : row.minX + near
+        let near = width * 0.1, travel = width * 0.35
+        let startX = side == .left ? width - near : near
         let endX = side == .left ? startX - travel : startX + travel
-        try input.hid.swipe(
-            from: input.normalized(startX, row.midY), to: input.normalized(endX, row.midY), duration: 0.4)
+        try input.hid.swipe(from: input.normalized(startX, y), to: input.normalized(endX, y), duration: 0.4)
     }
 
-    /// Rect of the button at the row's right end (ⓘ etc.). Its center sits about 0.6× the row height in from
-    /// the right end (Settings Bluetooth row: height 164px, ⓘ center 100px from the end — verified by drawing
-    /// on a screenshot). Scaling by height means we don't need the pixel scale or text size.
-    static func trailing(of row: CGRect) -> CGRect {
-        let inset = row.height * 0.6
-        return CGRect(x: row.maxX - inset * 2, y: row.minY, width: inset * 2, height: row.height)
+    /// The button at the right end of a row (ⓘ etc.). OCR gives only the line, not the row, so this
+    /// assumes the row runs to the screen's right edge, as table rows do. The ⓘ center sits about 100px
+    /// from the end of a 1290px-wide Settings row.
+    static func trailing(rowAt line: CGRect, width: Double) -> CGRect {
+        let size = width * 0.08
+        return CGRect(x: width - size * 1.5, y: line.midY - size / 2, width: size, height: size)
     }
 }
 
@@ -281,10 +148,10 @@ func tap(_ rect: CGRect, udid: String?, hold: Double = 0.08) throws {
 struct TypeCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "type",
-        abstract: "Press a text field (@eN) and type text (Hangul and ASCII). Without a ref, types into the already focused field.",
+        abstract: "Press a text field (@tN) and type text (Hangul and ASCII). Without a ref, types into the already focused field.",
         discussion: """
-            iphone-use type @e3 "iphone case" --enter
-            iphone-use type @e3 "New Name" --clear
+            iphone-use type @t3 "iphone case" --enter
+            iphone-use type @t3 "New Name" --clear
             If the on-screen keyboard doesn't appear, nothing is typed (it's not a text field). Hangul comes out
             right when the device input source is Korean, Latin letters when it's English (switch with
             `key ctrl+space`). Characters not on the keyboard layout, like emoji, can't be typed.
@@ -293,7 +160,7 @@ struct TypeCommand: ParsableCommand {
 
     @OptionGroup var device: DeviceOptions
 
-    @Argument(help: "A text field ref (@e3) and the text, or just the text.")
+    @Argument(help: "A text field ref (@t3, e.g. its placeholder text) and the text, or just the text.")
     var arguments: [String]
 
     @Flag(name: .long, help: "Press Return at the end (e.g. to run a search).")
@@ -302,12 +169,12 @@ struct TypeCommand: ParsableCommand {
     @Flag(name: .long, help: "Clear the existing content first (⌘A → Backspace).")
     var clear = false
 
-    @Flag(name: .long, help: "Don't take the list again after typing.")
+    @Flag(name: .long, help: "Don't read the screen again after typing.")
     var noUi = false
 
     func validate() throws {
         guard (1...2).contains(arguments.count) else {
-            throw ValidationError("Call it as type @e3 \"text\" or type \"text\".")
+            throw ValidationError("Call it as type @t3 \"text\" or type \"text\".")
         }
     }
 
@@ -318,14 +185,11 @@ struct TypeCommand: ParsableCommand {
         let keys = try TextCommand.keys(for: text)
 
         try UIScreen.with(udid: device.udid) { screen in
-            var position: Int?
             if let ref {
-                let index = try screen.position(of: ref)
-                let item = try screen.go(to: index)
-                try tap(try screen.measure(item), udid: device.udid)
-                position = index
+                let (rect, _) = try screen.locate(try screen.entry(ref))
+                try tap(rect, udid: device.udid)
             }
-            guard try keyboardAppears(rsd: screen.rsd(), wait: ref != nil) else { throw UIError.noKeyboard }
+            guard try keyboardAppears(rsd: screen.rsd, wait: ref != nil) else { throw UIError.noKeyboard }
 
             let input = try InputSession.open(udid: device.udid)
             if clear {
@@ -338,20 +202,14 @@ struct TypeCommand: ParsableCommand {
             if enter { try input.hid.typeKey(0x28, modifiers: []) }
             input.close()
 
-            print("Typed\(ref.map { " @e\($0)" } ?? "") ← \"\(text)\"\(enter ? " + Return" : "")")
+            print("Typed\(ref.map { " @t\($0)" } ?? "") ← \"\(text)\"\(enter ? " + Return" : "")")
             if noUi { return }
-            try screen.settle()
-            screen.printReport(
-                try screen.observe(limit: position.map(screen.batchLimit) ?? UIScreen.page))
+            screen.printReport(try screen.observe(try screen.settle()))
         }
     }
 
     /// Is the on-screen keyboard up? If a text field was just pressed, wait a little for the slide-up
     /// animation.
-    ///
-    /// Keyboard keys are accessibility elements too, but they're at the very end of the focus order, so
-    /// we'd have to walk all the way there. With a long list that takes seconds, so we look at the text near
-    /// the bottom of the screen instead (`TextRecognizer.keyboardVisible`; it doesn't pick targets).
     private func keyboardAppears(rsd: RemoteServiceDiscovery, wait: Bool) throws -> Bool {
         for attempt in 0..<(wait ? 6 : 1) {
             if attempt > 0 || wait { Thread.sleep(forTimeInterval: 0.3) }

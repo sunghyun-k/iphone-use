@@ -8,7 +8,7 @@
     {
       "name": "iphone-use",
       "source": "./",
-      "description": "See and operate a real iPhone or iPad over USB or Wi-Fi through its accessibility list.",
+      "description": "See and operate a real iPhone or iPad over USB or Wi-Fi from OCR text lists and gridded screenshots.",
       "version": "0.3.1"
     }
   ]

@@ -2,14 +2,13 @@ import CoreGraphics
 import Foundation
 import Vision
 
-/// Detects the on-screen keyboard in a screenshot. Runs on the Mac's Vision, so the device isn't touched.
+/// Reads the text on a screenshot (`ui`) and detects the on-screen keyboard. Runs on the Mac's Vision, so
+/// the device isn't touched.
 ///
-/// We used to find tap targets by on-screen text (`find`, `tap "text"`). OCR accuracy varies by language
-/// and it often pressed the wrong place, so that was removed; targets are now given by accessibility list
-/// refs (`ui`). The only remaining use is **whether the keyboard is up**. Keyboard keys are accessibility
-/// elements too, but they're at the very end of the focus order and we'd have to walk all the way there,
-/// so checking for single-character lines clustered near the bottom of the screen is cheaper. Never used
-/// to pick targets.
+/// OCR once picked tap targets by matching a string the caller guessed (`tap "text"`), and that often
+/// pressed the wrong place: the guess matched several lines, or a misread line. `ui` instead lists every
+/// line it read with a ref and saves the screenshot next to it, so the caller picks a line it has seen
+/// (PITFALLS #48).
 enum TextRecognizer {
     struct Line: Sendable {
         let text: String
@@ -49,6 +48,13 @@ enum TextRecognizer {
     /// up further by the suggestion bar / toolbar allowance (14% of screen height). Once, with the keyboard up,
     /// a `scroll` in the middle of the screen landed its swipe on the keys and typed "G" into a search field.
     static func keyboardTop(in lines: [Line], height: CGFloat) -> CGFloat? {
+        keysTop(in: lines, height: height).map { max(height * 0.2, $0 - height * 0.14) }
+    }
+
+    /// The top edge (pixel y) of the keyboard's top key row, without the suggestion bar allowance. `ui`
+    /// leaves out the lines below it: forty single letters would bury the screen's own text, and the field
+    /// just above the keys (a chat's input) must stay in the list.
+    static func keysTop(in lines: [Line], height: CGFloat) -> CGFloat? {
         let keys = lines.filter {
             $0.text.trimmingCharacters(in: .whitespaces).count == 1 && $0.frame.midY > height * 0.35
         }
@@ -56,7 +62,7 @@ enum TextRecognizer {
         let sorted = keys.sorted { $0.frame.midY < $1.frame.midY }
         for key in sorted {
             let row = sorted.filter { abs($0.frame.midY - key.frame.midY) < height * 0.015 }
-            if row.count >= 4 { return max(height * 0.2, key.frame.minY - height * 0.14) }
+            if row.count >= 4 { return row.map(\.frame.minY).min() }
         }
         return nil
     }

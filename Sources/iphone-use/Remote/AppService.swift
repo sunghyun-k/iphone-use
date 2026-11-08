@@ -56,31 +56,6 @@ enum AppService {
         try launch(rsd: rsd, bundleId: urlRouter, url: url)
     }
 
-    /// Running processes: pid -> executable path.
-    ///
-    /// The first 4 bytes of an accessibility element token are the owning app's pid (little endian),
-    /// so this tells us which app is on screen, or whether it's the home screen (SpringBoard).
-    static func processes(rsd: RemoteServiceDiscovery) throws -> [Int: String] {
-        let connection = try rsd.connect(to: serviceName)
-        defer { connection.close() }
-        let output = try CoreDeviceService(connection: connection)
-            .invoke("com.apple.coredevice.feature.listprocesses", timeout: 8)
-        var result: [Int: String] = [:]
-        func collect(_ value: XPCObject) {
-            if let entry = value.dictionaryValue {
-                if let pid = entry["processIdentifier"]?.intValue {
-                    let path = entry["executableURL"]?.dictionaryValue?["relative"]?.stringValue ?? ""
-                    result[pid] = path
-                }
-                entry.values.forEach(collect)
-            } else if let items = value.arrayValue {
-                items.forEach(collect)
-            }
-        }
-        output.values.forEach(collect)
-        return result
-    }
-
     /// After one timeout, kill `dtappserviced` on the device and retry.
     ///
     /// Once this daemon gets stuck, it accepts every later call and never answers. It still replies

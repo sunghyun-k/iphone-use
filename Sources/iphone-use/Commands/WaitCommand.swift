@@ -3,11 +3,6 @@ import CoreGraphics
 import Foundation
 
 /// Shared helpers built on screen capture.
-///
-/// Commands that located targets by text (`find`, `tap "text"`, `wait "text"`) were removed. OCR accuracy
-/// varies by language and they often tapped the wrong place. Targets are pointed at by ref in the
-/// accessibility list (`ui`). OCR is now used only to see whether the on-screen keyboard is up
-/// (`TextRecognizer.keyboardVisible`) — it never picks targets.
 enum ScreenText {
     enum Failure: Error, CustomStringConvertible {
         case timeout(String)

@@ -1,7 +1,7 @@
 import CMobileDevice
 import Foundation
 
-/// Connects to lockdown services (accessibility, installation_proxy).
+/// Connects to lockdown services (installation_proxy, syslog_relay).
 ///
 /// Over USB they are opened with `AMDeviceSecureStartService`. MobileDevice can't see Wi-Fi devices
 /// at all, and some devices fail lockdown pairing validation (PITFALLS #25), so otherwise we fall back

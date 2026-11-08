@@ -3,7 +3,7 @@ import Foundation
 /// `xcrun devicectl` wrapper.
 ///
 /// Launching apps, deep links and the installed-app list need no reverse engineering: CoreDevice's
-/// public CLI already does them. We only broke into the accessibility tree and screenshots ourselves;
+/// public CLI already does them. We only broke into input and screenshots ourselves;
 /// everything else is delegated here.
 ///
 /// Note: when a path through the CoreDevice media daemon (screenshots etc.) wedges on the device side,

@@ -1,15 +1,15 @@
 # iPhone Use
 
-A macOS command-line tool for seeing, controlling and reading the accessibility tree of a **real
-iPhone or iPad** connected over USB or Wi-Fi. It is not a simulator tool.
+A macOS command-line tool for seeing and controlling a **real iPhone or iPad** connected over USB or
+Wi-Fi. It is not a simulator tool.
 
-It is built for AI agents. `ui` returns the screen as a numbered, text-only list of elements.
-`press @e12` taps element 12 and reports what changed. The agent can work a phone without looking
-at screenshots. When accessibility isn't enough, screenshots with a labelled grid and coordinate
-touches are there too.
+It is built for AI agents. `ui` takes a screenshot, reads its text on the Mac with Vision OCR, and
+returns every line as a numbered list, with the screenshot saved next to it under a labelled grid.
+`press @t5` taps line 5 and reports what changed. Icons and toggles are tapped by grid cell
+(`touch --cell G21`).
 
-iphone-use runs on the same private stack that Xcode's **Device Hub** and **Accessibility Inspector**
-use. It needs no entitlements, no `sudo`, no app on the device and no WebDriverAgent. It needs only a
+iphone-use runs on the same private stack that Xcode's **Device Hub** uses. It needs no
+entitlements, no `sudo`, no code signing, no app on the device and no WebDriverAgent. It needs only a
 paired device with Developer Mode on.
 
 > **Status:** experimental. The tool depends on undocumented Apple services that can change with any
@@ -17,23 +17,23 @@ paired device with Developer Mode on.
 
 ```console
 $ iphone-use ui
-# Preferences
-@e1	Settings, Heading
-@e2	Apple Account, iCloud+ and more, Button
-@e5	Airplane Mode, 0, Button, Toggle
-@e12	General, Button
+23 text lines
+@t1	Settings	B2
+@t2	Search	C3
+@t3	Apple Account	C5
+@t9	General	C12
 …
-(more — ui --more)
+Screenshot: ~/.iphone-use/screen-<udid>.png (grid cells as in the third column; icons without text: touch --cell)
 
-$ iphone-use press @e12
-Pressed @e12 General, Button
-New screen — Preferences
-@e1	Settings, Button
-@e2	General, Heading
+$ iphone-use press @t9
+Pressed @t9 "General"
+New screen — 17 text lines
+@t1	Settings	A2
+@t2	General	E2
 …
 ```
 
-Element descriptions are what VoiceOver would read, in the device's language.
+Each line is the text OCR read, in the device's language, and the grid cell of its center.
 
 ## Requirements
 
@@ -89,16 +89,16 @@ For development, `swift build && ./.build/debug/iphone-use --help`.
 iphone-use devices                        # name, UDID and connection (usb / wifi)
 iphone-use daemon &                       # optional; keeps connections warm (0.25 s -> 0.03 s per command)
 
-iphone-use ui                             # first 20 elements, `ui --more` for the next page
-iphone-use ui --find "Search"             # only elements whose description contains the text
-iphone-use press @e12                     # tap; prints the new screen or only what changed
-iphone-use type @e36 "Battery"            # tap a text field and type
+iphone-use ui                             # text lines on screen + gridded screenshot
+iphone-use ui --find "Search"             # only lines containing the text
+iphone-use press @t9                      # tap; prints the new screen or only what changed
+iphone-use type @t2 "Battery"             # tap a text field and type
+iphone-use scroll down                    # prints the new list
 iphone-use home
 
 iphone-use launch Settings                # app name or bundle ID
 iphone-use open "prefs:root=General"      # deep link / URL
-iphone-use screenshot -o screen.png --grid --max-width 800
-iphone-use touch --cell G21               # tap the middle of grid cell G21
+iphone-use touch --cell G21               # tap the middle of grid cell G21 (icons, toggles)
 ```
 
 With more than one device, pass `--udid <UDID or name>` to every command, for example
@@ -108,33 +108,25 @@ With more than one device, pass `--udid <UDID or name>` to every command, for ex
 
 | Area | Commands | Notes |
 |---|---|---|
-| Read & act via accessibility | `ui`, `press`, `type`, `home` | Refs (`@eN`) instead of coordinates. After each action it waits for the screen to settle and prints a diff. `press` also has `--hold`, `--trailing` (row-end ⓘ buttons), `--action` and `--swipe` (reveal swipe actions such as Delete). |
+| Read & act on text | `ui`, `press`, `type`, `home` | OCR text lines with refs (`@tN`) and a gridded screenshot. After each action it waits for the screen to settle and prints a diff. `press` checks the line is still there before tapping, and also has `--hold`, `--trailing` (row-end ⓘ buttons and toggles) and `--swipe` (reveal swipe actions such as Delete). |
 | Apps | `apps`, `launch`, `open` | Launch by display name or bundle ID. Open any URL or deep link. |
 | Device settings | `settings`, `location` | Appearance, text size and accessibility toggles; simulated location. These are the same controls as Device Hub's settings panel. |
-| Screen & coordinates | `screenshot`, `wait`, `touch`, `swipe`, `scroll`, `text`, `key`, `button`, `paste`, `clipboard` | For screens with poor accessibility. `screenshot --grid` draws named cells so you can tap by cell instead of guessing pixels. |
-| Raw accessibility | `scan`, `attr` | Walks the whole focus order. The screen may scroll while it does. |
-| Diagnostics | `devices`, `daemon`, `hid-info`, `invoke`, `ax-probe`, `dtx-introspect` | `invoke` calls any CoreDevice feature by name, for exploration. |
+| Screen & coordinates | `screenshot`, `wait`, `touch`, `swipe`, `scroll`, `text`, `key`, `button`, `paste`, `clipboard` | For icons and anything without text. Grid cells let you tap by name instead of guessing pixels. `touch`, `swipe` and `scroll` print the new list too. |
+| Diagnostics | `devices`, `daemon`, `hid-info`, `invoke` | `invoke` calls any CoreDevice feature by name, for exploration. |
 
 Run `iphone-use <command> --help` for the options of each command.
 
 ### Using it from an AI agent
 
 [`skills/iphone-use/SKILL.md`](skills/iphone-use/SKILL.md) is a self-contained guide for agents. It
-covers the basic `ui` → `press` loop, how to read results, when to fall back to screenshots, and
+covers the basic `ui` → `press` loop, how to read results, when to look at the screenshot, and
 safety rules. The plugin and `npx skills` install it for you (see [Install](#install)).
 
 ## How it works
 
-Device Hub and Accessibility Inspector reach the device over **two independent paths**. DeviceHub.app
-doesn't link a single accessibility framework (`otool -L`). iphone-use implements both paths itself
-and combines them.
-
-| | Screen & input | Accessibility tree |
-|---|---|---|
-| Transport | RemoteXPC over sockets handed out by CoreDeviceService | DTXConnectionServices: lockdown over USB, lockdown shim inside the tunnel over Wi-Fi |
-| Device service | `com.apple.coredevice.*` | `com.apple.accessibility.axAuditDaemon.remoteserver` |
-| Host framework | `CoreDeviceMediaStreamSupport`, `UniversalHID` | `AccessibilityAudit`, `MobileDevice` |
-| Code | `Sources/iphone-use/Remote/` | `Sources/CDTXBridge/`, `AXSession.swift` |
+Screens are captured with `com.apple.coredevice.screencaptureservice` and read on the Mac with Vision
+(`VNRecognizeTextRequest`). Touches and keys go to the device's HID services. Both live in
+`Sources/iphone-use/Remote/`.
 
 **From socket to touch.** `devicectl` doesn't expose HID. CoreDevice's HID API is pure Swift with no
 `.swiftmodule`, so it can't be bound dynamically. iphone-use therefore speaks RemoteXPC directly:
@@ -144,7 +136,7 @@ and combines them.
    stock `CoreDeviceService` over libxpc, as `devicectl` does, for a usage assertion and then a
    connected socket per service (`com.apple.coredevice.action.createservicesocket`). No root, no
    entitlements, and Xcode keeps building and running on the same device.
-2. **Lockdown services.** Accessibility and `installation_proxy` are lockdown services. Over USB they
+2. **Lockdown services.** `installation_proxy` is a lockdown service. Over USB they
    are started with MobileDevice; otherwise iphone-use falls back to the `.shim.remote` copy.
 3. **Transport.** HTTP/2 that ignores standard semantics. HEADERS frames are empty,
    there is no HPACK, and everything travels in DATA frames as XPC envelopes. That is why the
@@ -152,10 +144,10 @@ and combines them.
 4. **HID.** Raw HID reports go to `com.apple.coredevice.hid.universalhidservice`: touchscreen service
    257 and keyboard 512. Hardware buttons go through `com.apple.coredevice.hid.indigo`.
 
-**Finding elements without coordinates.** The accessibility protocol gives no element frames. `ui`
-and `press` walk the Accessibility Inspector focus to the target. They then measure the **green focus
-box** the device draws around it, by diffing a screenshot with the box against one without. That
-rect is where the tap goes.
+**Text, not guesses.** OCR once picked targets from a string the agent guessed, and pressed the wrong
+place when the guess matched several lines or a misread one. `ui` instead lists every line it read
+with a ref, so the agent picks a line it has seen. Before tapping, `press` checks that the pixels
+around the line still look the same, and otherwise looks the line up again by its text.
 
 **Runtime binding.** Private frameworks are opened with `dlopen`, never linked. The binary still starts
 when Xcode is missing or a different version, and a missing symbol becomes a runtime error.
@@ -169,11 +161,9 @@ changing code that looks strange; most of it is there for a reason.
   its own layout, regardless of the input source. `type`/`text` handle ASCII and Hangul (mapped to
   Dubeolsik keys). Other text goes through `paste`, which makes the device show a paste-permission
   prompt every time.
-- `ui` moves accessibility focus like VoiceOver, so the screen can scroll a little. A `press` takes
-  about 5–8 s.
-- Accessibility Inspector attached to the same device starves `ui`/`scan`.
-- Some screens have little accessibility (games, canvases, some web content). Use `screenshot --grid`
-  and `touch --cell` there.
+- `ui` lists only text. Icons, toggle states and images are in the saved screenshot; tap them with
+  `touch --cell`.
+- OCR reads Korean and English. Other scripts may come out garbled.
 - No screen streaming. Screenshots were enough.
 
 ## Contributing

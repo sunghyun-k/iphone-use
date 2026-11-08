@@ -10,6 +10,10 @@ existing ones, because comments point at those numbers.
 A few entries mention commands that were removed later. The findings still explain today's
 code.
 
+The accessibility path (the "AX protocol" and "AX pitfalls" sections and #35–#47) was removed in
+favor of OCR on screenshots (#48). Those entries stay as a record of what was tried; no code cites
+them anymore, except #42 for comparing an area between two frames.
+
 ## AX protocol
 
 The RPC surface of `com.apple.accessibility.axAuditDaemon.remoteserver` can be read straight
@@ -758,3 +762,35 @@ DeviceHub.app has **empty** entitlements. All trust is handled by the pairing re
 `com.apple.private.accessibility.remoteDeviceContent` and others, but the device side has no way to
 verify host entitlements (lockdown/DTX carry no code-signing information), so that is only a local
 macOS gate. In practice a bare client can read everything.
+
+## Reading the screen by OCR
+
+### 48. OCR lists every line it read; the caller never guesses a string
+
+The first OCR commands (`find`, `tap "text"`) took a string from the caller and tapped the line that
+matched. They often pressed the wrong place: the guess matched several lines (a title and a row with
+the same word), or OCR had misread the line the caller meant. That is why the accessibility list
+replaced them. The accessibility path was then dropped for speed: walking focus to an element and
+measuring the green box (#37) took 5–8 s per `press` and 2–3 s per list, and only the focus order
+was listed, not what the screen showed.
+
+What the code does now:
+
+- `ui` reads the whole screenshot (Vision, `accurate`, Korean and English, about 0.3–0.6 s) and prints
+  **every** line with a ref and its grid cell, and saves the screenshot with the grid drawn on it. The
+  caller picks a line it has seen, or reads the image for icons and toggles, which have no text.
+  With the daemon running a `ui` takes about 1 s.
+- Lines are sorted into rows by vertical center (Vision returns them roughly by column, which put a
+  row's value after everything on the left).
+- The clock, battery and signal are dropped only when they are short digit-like lines in the top 5%.
+  Cutting the top by height alone also cut the navigation bar title on an iPad, where it sits almost
+  as high as the status bar.
+- Keyboard keys are dropped from the top key row down (`TextRecognizer.keysTop`), without the 14%
+  allowance `keyboardTop` adds for scrolling: that allowance swallowed the chat input field just
+  above the keys.
+- Each line keeps a small grayscale crop of where it was read. `press` taps only if that area still
+  looks the same (`ScreenCapture.sameArea`, #42); otherwise it reads the screen again and taps the
+  line with the same text only if there is exactly one.
+- After an action the new lines are matched to the old ones (same text nearby, same text anywhere,
+  then different text in the same spot as `changed`). If fewer than half match, it's a new screen
+  and refs restart at 1.

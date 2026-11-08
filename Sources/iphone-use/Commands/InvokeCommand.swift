@@ -136,3 +136,20 @@ extension XPCObject {
         }
     }
 }
+
+extension Data {
+    init?(hex: String) {
+        let characters = Array(hex)
+        guard characters.count % 2 == 0 else { return nil }
+
+        var bytes = [UInt8]()
+        bytes.reserveCapacity(characters.count / 2)
+        for index in stride(from: 0, to: characters.count, by: 2) {
+            guard let byte = UInt8(String(characters[index...index + 1]), radix: 16) else {
+                return nil
+            }
+            bytes.append(byte)
+        }
+        self.init(bytes)
+    }
+}

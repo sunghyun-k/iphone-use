@@ -12,12 +12,37 @@ final class InstrumentsHub {
     private let connection: IUDTXConnection
 
     init(rsd: RemoteServiceDiscovery) throws {
-        try IUDTXConnection.loadFramework(atPath: AXSession.dtxFrameworkPath())
+        try IUDTXConnection.loadFramework(atPath: Self.dtxFrameworkPath())
         let socket = try rsd.openSocket(to: Self.serviceName)
         connection = try IUDTXConnection(socket: socket.detach())
     }
 
     func close() { connection.cancel() }
+
+    /// Xcode's DTXConnectionServices. Follows `xcode-select -p`.
+    static func dtxFrameworkPath() throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcode-select")
+        process.arguments = ["-p"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        process.waitUntilExit()
+        let developer = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !developer.isEmpty else { throw Failure.xcodeNotFound }
+        // /path/Xcode.app/Contents/Developer -> /path/Xcode.app/Contents/SharedFrameworks
+        return (developer as NSString).deletingLastPathComponent
+            + "/SharedFrameworks/DTXConnectionServices.framework"
+    }
+
+    enum Failure: Error, CustomStringConvertible {
+        case xcodeNotFound
+
+        var description: String {
+            "Xcode not found (xcode-select -p is empty). Install Xcode and run `sudo xcode-select -s /Applications/Xcode.app`."
+        }
+    }
 
     /// pids of processes whose name matches exactly.
     func pids(named name: String) throws -> [Int] {

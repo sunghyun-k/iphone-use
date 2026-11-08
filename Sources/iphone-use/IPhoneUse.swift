@@ -6,22 +6,23 @@ struct IPhoneUse: ParsableCommand {
         commandName: "iphone-use",
         abstract: "See and control a connected iPhone or iPad over USB or Wi-Fi.",
         discussion: """
-            Runs on the private stack used by Xcode's Device Hub and Accessibility Inspector.
-            Needs no entitlements and no sudo, but the device must be paired and trusted.
+            Reads the screen from screenshots (OCR on the Mac) and sends touches and keys through the private \
+            CoreDevice stack Xcode's Device Hub uses. Needs no entitlements, no sudo and no app on the device, \
+            but the device must be paired and trusted.
             """,
         version: "0.3.1",
         subcommands: [
-            // See and act through accessibility (the default)
+            // Read the screen's text and act on it (the default)
             UICommand.self, PressCommand.self, TypeCommand.self, HomeCommand.self,
             // Apps
             AppsCommand.self, LaunchCommand.self, OpenCommand.self,
             // Device settings
             SettingsCommand.self, LocationCommand.self,
-            // Screen viewing and coordinate input (for screens with poor accessibility names)
-            ScreenshotCommand.self, WaitCommand.self, ScanCommand.self, AttrCommand.self,
+            // Screenshots and coordinate input (icons and anything without text)
+            ScreenshotCommand.self, WaitCommand.self,
             TouchCommand.self, SwipeCommand.self, ScrollCommand.self, TextCommand.self, KeyCommand.self, ButtonCommand.self, PasteCommand.self, ClipboardCommand.self,
             // Device / diagnostics
-            DaemonCommand.self, DevicesCommand.self, HIDInfoCommand.self, InvokeCommand.self, AXProbeCommand.self, DTXIntrospectCommand.self,
+            DaemonCommand.self, DevicesCommand.self, HIDInfoCommand.self, InvokeCommand.self,
         ]
     )
 }
