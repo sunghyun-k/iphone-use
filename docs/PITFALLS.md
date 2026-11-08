@@ -1133,3 +1133,61 @@ General, Calculator and the home screen list the same controls as before.
 `touch --cell` also snaps now: when the cell overlaps exactly one bracketed control (at least 20% of
 it) without its center being on any control, it taps that control's center and says so. `--exact`
 taps the cell's center.
+
+### 60. Buttons by shape, and boxes on the screenshot
+
+`ui --boxes` outlines each listed line on the saved screenshot with its ref, in blue over the magenta
+grid, so an agent can match lines to the picture without reading cell names. The grid stays: what
+detection misses still has a cell.
+
+#59's disc search became `buttonShapes`: filled discs, capsules and rounded rectangles 20–96 pt high (#61),
+from the flat-color regions. Kept out on purpose:
+
+- **Square corners** (list rows, cards, banners): 2 pt in from each corner of a button's box is outside
+  its fill when the corner radius is over 7 pt; on a row it's inside.
+- **Wider than 70% of the screen**: a grouped list's one-row card or a search bar would box half the
+  screen, and its text is a line already.
+- **A rounded square with a glyph**: Settings' row icons and app icons. Only discs, and shapes at least
+  1.4 times wider than high, take a glyph.
+- **More than one text line, or text over the edge**: chat bubbles and cards. A short one-line bubble
+  still passes (a "Skt" reply on a yellow bubble was boxed); it only gets an outline, no line.
+
+A shape with one text line on it adds no line: the text is pressable already, and the shape is kept as
+that line's `button` so `--boxes` outlines the whole button. A shape with a glyph is listed as
+`[circle button]` / `[button]`, or by the glyph's symbol name. The glyph pieces inside are dropped from
+the icon pass, so nothing is listed twice.
+
+The fill tolerance follows the contrast with the surroundings (half of it, at most 24). With a fixed 24,
+light gray chips on white (about 15 apart) took the page for their fill, their corners looked filled,
+and only the dark selected chip was found.
+
+Checked on KakaoTalk's chat list, chat and friends tab, Settings, Calculator and the home screen: chips,
+round input buttons and the profile disc are found; rows, widgets and app icons aren't. The full read
+(OCR included) takes 0.6–1.0 s per screen in a release build.
+
+### 61. The Calculator's keypad passed for an on-screen keyboard
+
+`keysTop` took any row of four or more single-character lines in the lower part of the screen as the
+keyboard's top row. The Calculator's keypad (five round keys a row, single digits on them) matched, so
+`ui` dropped every key from the list and said "the on-screen keyboard is up; its keys are left out".
+A source-blind agent had to tap all of it by grid cell. Now a row needs six: a real keyboard's top row
+has ten keys, and OCR misses a few thin ones (`I`, `l`). The note is printed only when keys were
+actually left out; the looser `keyboardVisible`, which also fires on keypads, still guards `type`.
+
+With the keys back in the list, the gray glass keys left `[icon]` fragments along their rims. Two
+changes made each key one button (`buttonShapes`, #60):
+- Shapes up to 96 pt high (the keys are about 76 pt on the foldable's inner screen).
+- The contrast with the surroundings is sampled 4 pt outside the shape, not 2: right outside a glass
+  key is its own darker rim ring, which made the tolerance so tight that half the key wasn't fill.
+A few keys (`1`, `6`, `AC`, `.`, `÷`) are still missed; they're text lines or cells.
+
+`touch --cell` snapping (#59) now needs a near miss: the cell's center within a quarter cell of the
+control. On the Calculator, a cell whose center sat on an unlisted key reached into a listed neighbor,
+and snapping would have pressed the neighbor. The message names the control's own cell so the agent can
+see where the tap went.
+
+Measured with two source-blind runs of the same task (Clock's city list, 12 × 7 on the Calculator), one
+with plain `ui` and one with `ui --boxes`, before these fixes: 16 commands and no misses with the grid,
+32 commands and 4 misses with boxes. Three of the four misses were stale refs from pressing several
+keys without reading the list in between; the boxes neither caused nor prevented them. Both runs spent
+most of their commands on the keypad that wasn't listed.

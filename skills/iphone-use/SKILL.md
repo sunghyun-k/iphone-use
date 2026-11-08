@@ -103,8 +103,9 @@ iphone-use type @t2 "Battery" # tap the field (here its placeholder text) and ty
     flips the switch.
   - `[chevron left]`, `[plus]`, `[info circle]`, `[checkmark]`, `[magnifyingglass]` …: a common icon,
     named after its SF Symbol. `[chevron left]` near the top is usually the back button.
-  - A round button with a glyph on it (a chat's send arrow on a colored disc) is one line for the
-    whole disc, named after its glyph or `[icon]`.
+  - `[circle button]` / `[button]`: a filled disc, or a capsule wider than high, with a glyph on it (a
+    chat's send arrow on a yellow disc). The line covers the whole button. When the glyph is a common
+    symbol, it's named after that instead (`[chevron left]` on a round glass button).
   - `[icon]`: an icon that wasn't recognized (an app's own artwork). Look at the screenshot to see what
     it is before pressing it, or run `ui --icons` to have the Mac's on-device model name each one:
     `[icon: paper plane]`, `[icon: download]`. That takes about half a second per icon, and the name is
@@ -122,7 +123,14 @@ iphone-use type @t2 "Battery" # tap the field (here its placeholder text) and ty
   user.
 
 **Looking at the screenshot.** Read the saved file whenever the text alone doesn't settle it: which
-line is a button, what an `[icon]` is, where an unlisted icon is. The image is 720 px wide plus grid
+line is a button, what an `[icon]` is, where an unlisted icon is.
+
+**`ui --boxes`** draws each listed line's box on the screenshot in blue, with its ref (`t12` means
+`@t12`) just above the box. A text line that sits on a button (a chip like `안읽음`, a round `+`) is
+outlined by the whole button. Use it when you need to match lines to what you see: several lines with
+the same text, a crowded toolbar, an icon you aren't sure is listed. Anything **without** a box isn't in
+the list; tap it by grid cell. The printed list is the same as plain `ui`. A short chat bubble can be
+outlined like a button. The image is 720 px wide plus grid
 margins, small enough to read every turn. It's overwritten by every command that reads the screen. It
 shows whatever is on the user's screen: don't copy it elsewhere or attach it anywhere.
 
@@ -192,6 +200,7 @@ by its text)`; if that text appears more than once, it stops instead of guessing
 ```
 iphone-use ui [--find "text"] [--wait]            # lines on screen (@tN<TAB>text or [control]<TAB>cell) + gridded screenshot
 iphone-use ui --icons                             # also name the unrecognized [icon]s (slower; needs macOS 27 + Apple Intelligence)
+iphone-use ui --boxes                             # also outline every listed line on the screenshot, labeled t1, t2 …
 iphone-use press @tN [--hold 0.8] [--no-ui]       # tap the line; --hold 0.6 or more is a long press
 iphone-use press @tN --trailing                   # tap the right end of that line's row (when its ⓘ or switch isn't listed)
 iphone-use press @tN --swipe left|right           # short swipe on that row to reveal hidden buttons (Delete etc.)
@@ -362,10 +371,11 @@ iphone-use press @t32          # → confirmation, if the app asks for one
   `swipe --from C12 --to C4`.
 - A cell is about 40 pt on every device, roughly a fingertip, so an iPad or an unfolded foldable has
   more cells than an iPhone. Tapping a cell's center hits a normal button anywhere in it.
-- **If the cell only partly covers a listed control** (a `[bracketed]` line) and its center misses
-  every control, `touch --cell` taps that control's center and says
-  `Tapped J9 on the center of @t18 [icon], which the cell only partly covers …`. Add `--exact` to tap
-  the cell's own center. If the
+- **If the cell's center just misses a listed control** (a `[bracketed]` line the cell partly covers,
+  within a quarter cell), `touch --cell` taps that control's center and says
+  `Tapped @t18 [circle button] at I9 instead of the center of J9, which only partly covers it …`.
+  Check that `@t18` is what you meant; add `--exact` to tap the cell's own center.
+- If the
   target is small and straddles a cell border, take a finer grid, about twice the columns you see
   (`screenshot -o f.png --grid --grid-size 24 --max-width 800`), and **pass the same `--grid-size`
   when you tap.**

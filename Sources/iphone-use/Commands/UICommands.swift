@@ -10,7 +10,8 @@ struct UICommand: ParsableCommand {
         discussion: """
             Each line is `@tN<TAB>text<TAB>grid cell`, top to bottom. Pass the ref to press / type. Controls
             without text are found by their shape and listed in brackets: `[toggle on] Wi-Fi` (a switch, its
-            state and its row's label), `[chevron left]` (a common symbol), `[icon]` (an unrecognized icon; --icons
+            state and its row's label), `[chevron left]` (a common symbol), `[circle button]` / `[button]` (a filled
+            button with a glyph), `[icon]` (an unrecognized icon; --icons
             asks the Mac's on-device model to name it: `[icon: paper plane]`). Only what's on screen is listed; scroll to see more. On the same screen refs stay the same; on a
             new screen numbering restarts at 1.
             """
@@ -27,6 +28,9 @@ struct UICommand: ParsableCommand {
     @Flag(name: .long, help: "Name each unrecognized [icon] with the Mac's on-device model ([icon: paper plane]). About 0.5 s per icon.")
     var icons = false
 
+    @Flag(name: .long, help: "Also outline each listed line on the saved screenshot, labeled with its ref (t12). A text line on a button is outlined by the button.")
+    var boxes = false
+
     func run() throws {
         try UIScreen.with(udid: device.udid) { screen in
             let image = wait ? try screen.settle() : try screen.capture()
@@ -34,6 +38,7 @@ struct UICommand: ParsableCommand {
             // is printed either way.
             _ = try screen.observe(image)
             if icons { screen.nameIcons(in: image) }
+            if boxes { try screen.saveImage(image, boxes: true) }
             guard let find else {
                 print("\(screen.state.entries.count) lines")
                 screen.printList(screen.state.entries)

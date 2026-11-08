@@ -142,9 +142,16 @@ struct TouchCommand: ParsableCommand {
         let center = CGPoint(x: cell.midX, y: cell.midY)
         let controls = state.entries.filter { $0.text.hasPrefix("[") }
         if controls.contains(where: { $0.frame.contains(center) }) { return nil }
+        // Only a near miss: the center within a quarter cell of the control. Farther off, the center may sit
+        // on a control that isn't listed (a Calculator key detection missed), and snapping would press its
+        // listed neighbor instead.
+        let reach = cell.width * 0.25
         let partly = controls.filter { entry in
             let overlap = entry.frame.intersection(cell)
-            return !overlap.isNull && overlap.width * overlap.height >= 0.2 * entry.frame.width * entry.frame.height
+            let f = entry.frame
+            let dx = max(f.minX - center.x, 0, center.x - f.maxX), dy = max(f.minY - center.y, 0, center.y - f.maxY)
+            return !overlap.isNull && overlap.width * overlap.height >= 0.2 * f.width * f.height
+                && hypot(dx, dy) <= reach
         }
         return partly.count == 1 ? partly[0] : nil
     }
@@ -162,6 +169,7 @@ struct TouchCommand: ParsableCommand {
 
         let (x, y): (Double, Double)
         var snappedTo: UIState.Entry?
+        var snappedCell = ""
         if let cell {
             let layout = ScreenGrid(
                 width: session.screen.width, height: session.screen.height,
@@ -172,6 +180,11 @@ struct TouchCommand: ParsableCommand {
                 snappedTo = Self.control(
                     partlyIn: rect, state: UIState.load(udid: udid),
                     screen: CGSize(width: session.screen.width, height: session.screen.height))
+                if let control = snappedTo {
+                    snappedCell = layout.name(
+                        column: min(layout.columns - 1, Int(control.frame.midX / layout.cell)),
+                        row: min(layout.rows - 1, Int(control.frame.midY / layout.cell)))
+                }
             }
         } else {
             (x, y) = session.devicePoint(self.x!, self.y!, imageWidth: imageWidth)
@@ -184,7 +197,9 @@ struct TouchCommand: ParsableCommand {
             try session.hid.tap(x: point.x, y: point.y, hold: hold)
         }
         if let snappedTo, let cell {
-            print("Tapped \(cell.uppercased()) on the center of @t\(snappedTo.ref) \(snappedTo.text), which the cell only partly covers (\(Int(target.0)), \(Int(target.1))). For the cell's own center, add --exact")
+            // The control's own cell, so the agent can tell whether it's the thing it meant: a cell's corner
+            // can reach a neighbor (PITFALLS #61).
+            print("Tapped @t\(snappedTo.ref) \(snappedTo.text) at \(snappedCell) instead of the center of \(cell.uppercased()), which only partly covers it. If that's not what you meant, run ui and pick the target again, or add --exact")
         } else {
             print("Tapped \(cell.map { "\($0.uppercased()) " } ?? "")(\(Int(x)), \(Int(y)))")
         }

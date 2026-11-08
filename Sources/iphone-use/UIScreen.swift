@@ -16,6 +16,8 @@ struct UIState: Codable {
         var rect: [Double]
         /// `ScreenCapture.areaPixels` around the line, base64.
         var pixels: String?
+        /// The button shape a text line sits on (`ui --boxes` outlines it instead of the text).
+        var button: [Double]?
 
         var frame: CGRect { CGRect(x: rect[0], y: rect[1], width: rect[2], height: rect[3]) }
 
@@ -25,7 +27,11 @@ struct UIState: Codable {
             let r = line.frame
             rect = [r.minX, r.minY, r.width, r.height].map { (Double($0) * 10).rounded() / 10 }
             pixels = ScreenCapture.areaPixels(image, in: UIState.checkArea(r)).map { Data($0).base64EncodedString() }
+            button = line.button.map { [$0.minX, $0.minY, $0.width, $0.height].map { (Double($0) * 10).rounded() / 10 } }
         }
+
+        /// What `ui --boxes` outlines: the button the line sits on, or the line itself.
+        var box: CGRect { button.map { CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) } ?? frame }
     }
 
     var udid: String
@@ -141,10 +147,14 @@ final class UIScreen {
     static func read(_ image: CGImage, scale: Int) throws -> (lines: [TextRecognizer.Line], keyboard: Bool) {
         let height = CGFloat(image.height)
         var lines = try TextRecognizer.lines(in: image)
-        let keyboard = TextRecognizer.keyboardVisible(in: lines, height: height)
         // Found against all the text, so glyphs OCR already read (status items included) aren't repeated.
-        var controls = ScreenElements.find(in: image, text: lines, scale: scale)
-        if let keys = TextRecognizer.keysTop(in: lines, height: height) {
+        var (controls, buttons) = ScreenElements.find(in: image, text: lines, scale: scale)
+        for (index, button) in buttons { lines[index].button = button }
+        // "Keys are left out" is said only when they were: the looser `keyboardVisible` also fires on a
+        // keypad (the Phone app's, the Calculator's), whose keys stay in the list.
+        let keysTop = TextRecognizer.keysTop(in: lines, height: height)
+        let keyboard = keysTop != nil
+        if let keys = keysTop {
             lines.removeAll { $0.frame.midY > keys - height * 0.005 }
             controls.removeAll { $0.frame.midY > keys - height * 0.005 }
         }
@@ -160,7 +170,7 @@ final class UIScreen {
             // one name for it, so an agent looking for the back button finds it either way.
             if ["<", "‹"].contains(text) { text = "[chevron left]" }
             if [">", "›"].contains(text) { text = "[chevron right]" }
-            return text.isEmpty ? nil : TextRecognizer.Line(text: text, frame: line.frame)
+            return text.isEmpty ? nil : TextRecognizer.Line(text: text, frame: line.frame, button: line.button)
         }
         return (readingOrder(lines), keyboard)
     }
@@ -413,12 +423,15 @@ final class UIScreen {
         abs(a.midY - b.midY) < max(a.height, b.height) * 0.5 && abs(a.minX - b.minX) < max(a.height, b.height) * 1.5
     }
 
-    private func saveImage(_ image: CGImage) throws {
+    /// Saves the screenshot with the grid; with `boxes`, also each listed line's box and ref (`ui --boxes`),
+    /// which needs the refs, so it's saved again after the list is made.
+    func saveImage(_ image: CGImage, boxes: Bool = false) throws {
         let width = min(Self.imageWidth, image.width)
         let height = Int((Double(image.height) * Double(width) / Double(image.width)).rounded())
         let base = width == image.width ? image : try ScreenCapture.resize(image, width: width, height: height)
         let grid = ScreenGrid(width: Double(image.width), height: Double(image.height), pointScale: state.scale.map(Double.init))
-        let (data, _) = try ScreenCapture.encode(try grid.draw(on: base))
+        let outlined = boxes ? state.entries.map { (rect: $0.box, label: "t\($0.ref)") } : []
+        let (data, _) = try ScreenCapture.encode(try grid.draw(on: base, boxes: outlined))
         let url = UIState.imageURL(udid: udid)
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

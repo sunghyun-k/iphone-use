@@ -87,7 +87,9 @@ struct ScreenGrid {
     /// drawn over the screen. Labeling every cell would cover what's underneath (small text, icons). Counting
     /// past twenty rows it's easy to slip by one, so every 5th line is bold, like graph paper, to count in
     /// chunks. With names in the margin, nothing on the screen itself is covered.
-    func draw(on image: CGImage) throws -> CGImage {
+    /// `boxes` (device pixels, with a ref label each) are outlined over the grid in another color, for
+    /// `ui --boxes`.
+    func draw(on image: CGImage, boxes: [(rect: CGRect, label: String)] = []) throws -> CGImage {
         let scale = Double(image.width) / width
         let step = cell * scale
         let fontSize = max(10, step * 0.32)
@@ -155,6 +157,38 @@ struct ScreenGrid {
             let y = (start + min(start + step, bottom)) / 2
             label(String(row + 1), at: CGPoint(x: margin / 2, y: y))
             label(String(row + 1), at: CGPoint(x: right + margin / 2, y: y))
+        }
+
+        // Boxes in a color unlike the grid's magenta, each labeled just outside its top-left corner so the
+        // label covers the screen next to the box, not what's in it.
+        let boxColor = CGColor(red: 0, green: 0.55, blue: 1, alpha: 1)
+        let tagSize = max(9, step * 0.24)
+        let tagFont = CTFontCreateWithName("Menlo-Bold" as CFString, tagSize, nil)
+        let tagAttributes: [NSAttributedString.Key: Any] = [
+            NSAttributedString.Key(kCTFontAttributeName as String): tagFont,
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(red: 1, green: 1, blue: 1, alpha: 1),
+        ]
+        for box in boxes {
+            let r = CGRect(
+                x: left + box.rect.minX * scale, y: top + box.rect.minY * scale,
+                width: box.rect.width * scale, height: box.rect.height * scale)
+            context.setStrokeColor(boxColor)
+            context.setLineWidth(max(1, step / 40))
+            context.stroke(r)
+            let tag = CTLineCreateWithAttributedString(NSAttributedString(string: box.label, attributes: tagAttributes))
+            let tagWidth = CTLineGetTypographicBounds(tag, nil, nil, nil) + tagSize * 0.4
+            let tagHeight = tagSize * 1.2
+            // Above the box when there's room, else just inside its top edge.
+            let tagTop = r.minY - tagHeight >= top ? r.minY - tagHeight : r.minY
+            let tagRect = CGRect(x: max(left, min(r.minX, right - tagWidth)), y: tagTop, width: tagWidth, height: tagHeight)
+            context.setFillColor(boxColor)
+            context.fill(tagRect)
+            context.saveGState()
+            context.translateBy(x: tagRect.minX + tagSize * 0.2, y: tagRect.maxY - tagSize * 0.28)
+            context.scaleBy(x: 1, y: -1)
+            context.textPosition = .zero
+            CTLineDraw(tag, context)
+            context.restoreGState()
         }
         guard let result = context.makeImage() else { throw ScreenshotError.decodeFailed }
         return result

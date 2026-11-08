@@ -14,6 +14,8 @@ enum TextRecognizer {
         let text: String
         /// Screenshot pixel coordinates (origin top-left).
         let frame: CGRect
+        /// The button shape this line is the label of, if it sits on one (`ScreenElements`). Pixels.
+        var button: CGRect? = nil
     }
 
     /// All text lines on the screen.
@@ -62,7 +64,10 @@ enum TextRecognizer {
         let sorted = keys.sorted { $0.frame.midY < $1.frame.midY }
         for key in sorted {
             let row = sorted.filter { abs($0.frame.midY - key.frame.midY) < height * 0.015 }
-            if row.count >= 4 { return row.map(\.frame.minY).min() }
+            // Six or more: a keyboard's top row has ten keys, and OCR misses a few thin ones. With four, the
+            // Calculator's keypad (five round keys a row) counted as a keyboard, and its keys were left out
+            // of the list (PITFALLS #61).
+            if row.count >= 6 { return row.map(\.frame.minY).min() }
         }
         return nil
     }

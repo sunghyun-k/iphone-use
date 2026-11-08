@@ -20,10 +20,13 @@ enum ScreenElements {
         return short < 1000 || short >= 1450 ? 2 : 3
     }
 
-    /// Bracketed lines for the controls on `image`. `text` is the OCR result: icons overlapping text are
-    /// skipped (OCR already has them, like "›" or "✓"), and a switch takes the label to its left.
-    static func find(in image: CGImage, text: [TextRecognizer.Line], scale s: Int) -> [TextRecognizer.Line] {
-        guard let map = RegionMap(image, scale: s) else { return [] }
+    /// Bracketed lines for the controls on `image`, and the button shape around each text line that sits
+    /// on one (keyed by its index in `text`). `text` is the OCR result: icons overlapping text are skipped
+    /// (OCR already has them, like "›" or "✓"), and a switch takes the label to its left.
+    static func find(in image: CGImage, text: [TextRecognizer.Line], scale s: Int)
+        -> (controls: [TextRecognizer.Line], buttons: [Int: CGRect])
+    {
+        guard let map = RegionMap(image, scale: s) else { return ([], [:]) }
         let px = CGFloat(s)
         var found: [TextRecognizer.Line] = []
         var taken: [CGRect] = []
@@ -38,26 +41,50 @@ enum ScreenElements {
         }
 
         let textInPoints = text.map { CGRect(x: $0.frame.minX / px, y: $0.frame.minY / px, width: $0.frame.width / px, height: $0.frame.height / px) }
-        for (group, glyph) in map.iconGroups(skipping: textInPoints) {
+        let shapes = map.buttonShapes(text: textInPoints).filter { shape in
+            !taken.contains { $0.intersects(shape.frame.scaled(px)) }
+        }
+        var buttons: [Int: CGRect] = [:]
+        for shape in shapes {
+            let frame = shape.frame.scaled(px)
+            if let index = shape.text {
+                // The label is already a line; the shape only says where the button is.
+                if buttons[index].map({ $0.width * $0.height < frame.width * frame.height }) ?? true {
+                    buttons[index] = frame
+                }
+                continue
+            }
+            guard let glyph = shape.glyph else { continue }
+            if leadingIcon(frame, text: text, px: px) { continue }
+            let name = Ink(image, glyph.scaled(px).insetBy(dx: -px, dy: -px)).flatMap { $0.oneColor ? Symbols.name(for: $0) : nil }
+            found.append(.init(text: "[\(name ?? (shape.round ? "circle button" : "button"))]", frame: frame))
+            taken.append(frame)
+        }
+
+        for group in map.iconGroups(skipping: textInPoints) {
             let frame = group.scaled(px)
             if taken.contains(where: { $0.insetBy(dx: -px * 3, dy: -px * 3).contains(frame) }) { continue }
+            // A glyph on a button (listed above, or a text button's icon) is the button.
+            if shapes.contains(where: { $0.frame.scaled(px).insetBy(dx: -px * 2, dy: -px * 2).contains(frame) }) { continue }
             let overlapsText = text.contains { line in
                 let i = line.frame.intersection(frame)
                 return !i.isNull && i.width * i.height > 0.3 * frame.width * frame.height
             }
             if overlapsText { continue }
-            // A big icon right before a row's text (Settings' colored squares, a profile picture next to a
-            // name) adds nothing: pressing the text does the same. Small ones stay, like a heart before its
-            // like count.
-            let leading = frame.width >= 24 * px && frame.height >= 24 * px && text.contains { line in
-                line.frame.minX > frame.maxX && line.frame.minX - frame.maxX < 16 * px
-                    && abs(line.frame.midY - frame.midY) < frame.height * 0.7
-            }
-            if leading { continue }
-            guard let ink = Ink(image, glyph.scaled(px).insetBy(dx: -px, dy: -px)), ink.oneColor else { continue }
+            if leadingIcon(frame, text: text, px: px) { continue }
+            guard let ink = Ink(image, frame.insetBy(dx: -px, dy: -px)), ink.oneColor else { continue }
             found.append(.init(text: "[\(Symbols.name(for: ink) ?? "icon")]", frame: frame))
         }
-        return found
+        return (found, buttons)
+    }
+
+    /// A big icon right before a row's text (Settings' colored squares, a profile picture next to a name)
+    /// adds nothing: pressing the text does the same. Small ones stay, like a heart before its like count.
+    private static func leadingIcon(_ frame: CGRect, text: [TextRecognizer.Line], px: CGFloat) -> Bool {
+        frame.width >= 24 * px && frame.height >= 24 * px && text.contains { line in
+            line.frame.minX > frame.maxX && line.frame.minX - frame.maxX < 16 * px
+                && abs(line.frame.midY - frame.midY) < frame.height * 0.7
+        }
     }
 }
 
@@ -218,10 +245,7 @@ private struct RegionMap {
     /// into: the fill is its background, and the glyph comes out on its own.
     /// Pieces mostly inside a `text` rect (points) are letters, left out before merging: there are hundreds
     /// of them, and merging is quadratic.
-    /// Each group comes with the rect its glyph is judged by: the group itself, or for a filled disc
-    /// (`discButtons`), the glyph on it, while the disc is what's listed and tapped.
-    func iconGroups(skipping text: [CGRect]) -> [(frame: CGRect, glyph: CGRect)] {
-        let discs = discButtons()
+    func iconGroups(skipping text: [CGRect]) -> [CGRect] {
         var pieces: [CGRect] = []
         for blob in blobs {
             // A thin outline around something bigger (a round button's rim) would be merged with the
@@ -245,8 +269,6 @@ private struct RegionMap {
         }
         pieces = pieces.filter { piece in
             guard piece.width >= 6 || piece.height >= 6 else { return false }
-            // A disc button or its glyph: the disc stands for both.
-            if discs.contains(where: { $0.frame.insetBy(dx: -2, dy: -2).contains(piece) }) { return false }
             return !text.contains { t in
                 let i = t.intersection(piece)
                 return !i.isNull && i.width * i.height > 0.5 * piece.width * piece.height
@@ -270,21 +292,38 @@ private struct RegionMap {
         return pieces.filter { r in
             let aspect = r.width / r.height
             return r.width >= 8 && r.height >= 8 && aspect > 0.3 && aspect < 3.5
-        }.map { ($0, $0) } + discs
+        }
     }
 
-    /// Round buttons filled with one color and a glyph on them, like a chat's send button (a black arrow on
-    /// a yellow disc), found from the flat-color regions rather than the blobs.
+    struct Shape {
+        /// Points.
+        var frame: CGRect
+        /// A disc, rather than a capsule or a rounded rectangle.
+        var round: Bool
+        /// The glyph on it (points), when it has no text.
+        var glyph: CGRect?
+        /// The index of the text line on it.
+        var text: Int?
+    }
+
+    /// Buttons by their shape: a filled disc, capsule or rounded rectangle 20–96 pt high with a glyph or one
+    /// line of text on it. Found from the flat-color regions rather than the blobs (PITFALLS #59, #60).
     ///
-    /// Blobs missed them two ways (PITFALLS #59). A small disc is one blob of two colors, which the
-    /// one-color check throws out. And a disc touching a bigger shape (the input bar it sits in) joins
-    /// that shape's blob, which is too big to look into; whether it touched changed between two captures
-    /// of the same screen. The fill region itself doesn't depend on either.
+    /// Blobs missed round buttons two ways. A small disc is one blob of two colors, which the one-color
+    /// check throws out. And a disc touching a bigger shape (the input bar it sits in) joins that shape's
+    /// blob, which is too big to look into; whether it touched changed between two captures of the same
+    /// screen. The fill region itself doesn't depend on either.
     ///
-    /// Only discs: a rounded square (a Settings row's colored icon) would put its glyph next to every row
-    /// label, and an app icon is one. Told apart by the corners: a disc leaves them empty, a rounded square
-    /// fills them.
-    func discButtons() -> [(frame: CGRect, glyph: CGRect)] {
+    /// What is left out, and why:
+    /// - Square corners (list rows, cards, banners): a button's corners are rounded, so a point 2 pt in
+    ///   from each corner of its box lies outside the fill.
+    /// - Anything wider than 70% of the screen (a grouped list's one-row card, a search bar): the text on
+    ///   it is already a line, and boxing it would cover the screen.
+    /// - A rounded square with a glyph (a Settings row's colored icon, an app icon): it would put its
+    ///   glyph next to every row label. Only discs and shapes wider than high take a glyph.
+    /// - A shape with more than one line of text, or text spilling over its edge (a chat bubble, a card).
+    /// - An empty shape (a switch's knob, a color swatch).
+    func buttonShapes(text: [CGRect]) -> [Shape] {
         let n = regionSize.count
         var minX = [Int](repeating: Int.max, count: n), minY = minX
         var maxX = [Int](repeating: -1, count: n), maxY = maxX
@@ -297,33 +336,62 @@ private struct RegionMap {
                 if y > maxY[id] { maxY[id] = y }
             }
         }
-        var found: [(frame: CGRect, glyph: CGRect)] = []
+        var found: [Shape] = []
         for id in 0..<n where regionSize[id] >= 120 {
             let bw = maxX[id] - minX[id] + 1, bh = maxY[id] - minY[id] + 1
-            guard (16...64).contains(bw), (16...64).contains(bh) else { continue }
+            guard (20...96).contains(bh), bw >= 20, Double(bw) <= Double(w) * 0.7 else { continue }
             let aspect = Double(bw) / Double(bh)
-            let cover = Double(regionSize[id]) / Double(bw * bh)
-            // A full disc covers π/4 ≈ 0.785 of its box; its glyph takes some of that.
-            guard aspect > 0.85, aspect < 1.18, cover > 0.5, cover < 0.86 else { continue }
+            guard aspect > 0.85 else { continue }
+            let round = aspect < 1.18
+            let box = CGRect(x: minX[id], y: minY[id], width: bw, height: bh)
             // By color, not region id: a slight gradient splits one fill into a few regions.
             let fill = color(minY[id] * w + (0..<w).first(where: { Int(region[minY[id] * w + $0]) == id })!)
-            func isFill(_ i: Int) -> Bool { Self.near(color(i), fill, 24) }
-            func inFill(_ fx: Double, _ fy: Double) -> Bool {
-                let x = minX[id] + Int((fx * Double(bw - 1)).rounded()), y = minY[id] + Int((fy * Double(bh - 1)).rounded())
-                return isFill(y * w + x)
+            // How near counts as fill depends on the surroundings: a light gray chip on white is only about 15
+            // apart from the page, and a fixed tolerance took the page for the chip, so its corners looked filled.
+            let midX = (minX[id] + maxX[id]) / 2, midY = (minY[id] + maxY[id]) / 2
+            // 4 pt out: a glass key's darker rim ring sits right outside its fill.
+            let outside = [(midX, minY[id] - 4), (midX, maxY[id] + 4), (minX[id] - 4, midY), (maxX[id] + 4, midY)]
+                .filter { $0.0 >= 0 && $0.1 >= 0 && $0.0 < w && $0.1 < h }
+                .map { color($0.1 * w + $0.0) }
+            let contrast = outside.map { max(abs($0.0 - fill.0), abs($0.1 - fill.1), abs($0.2 - fill.2)) }.min() ?? 48
+            guard contrast >= 6 else { continue }
+            let tolerance = min(24, contrast / 2)
+            func isFill(_ x: Int, _ y: Int) -> Bool { Self.near(color(y * w + x), fill, tolerance) }
+            var filled = 0
+            for y in minY[id]...maxY[id] { for x in minX[id]...maxX[id] where isFill(x, y) { filled += 1 } }
+            guard Double(filled) > 0.45 * Double(bw * bh) else { continue }
+            // Corners: a disc's edge passes 0.15 of its size from its box's corner, so 0.1 in is outside it;
+            // a rounded square's (radius about 0.22) passes 0.06 from it, so 0.1 in is inside. Wider shapes
+            // just need rounded corners: 2 pt in is outside any corner radius over 7 pt.
+            let inset = round ? Double(bw) * 0.1 : 2
+            let corners = [
+                (Double(minX[id]) + inset, Double(minY[id]) + inset), (Double(maxX[id]) - inset, Double(minY[id]) + inset),
+                (Double(minX[id]) + inset, Double(maxY[id]) - inset), (Double(maxX[id]) - inset, Double(maxY[id]) - inset),
+            ]
+            guard !corners.contains(where: { isFill(Int($0.0.rounded()), Int($0.1.rounded())) }) else { continue }
+            let rim = max(1, Int(Double(min(bw, bh)) * 0.06))
+            let rims = [(midX, minY[id] + rim), (midX, maxY[id] - rim), (minX[id] + rim, midY), (maxX[id] - rim, midY)]
+            guard rims.allSatisfy({ isFill($0.0, $0.1) }) else { continue }
+
+            let touching = text.indices.filter { text[$0].intersects(box) }
+            if !touching.isEmpty {
+                // One line, wholly on it, and tall enough to be its label rather than small print on a card.
+                guard touching.count == 1, let index = touching.first,
+                    box.insetBy(dx: -1, dy: -1).contains(text[index]), text[index].height >= Double(bh) * 0.25
+                else { continue }
+                found.append(Shape(frame: box, round: round, glyph: nil, text: index))
+                continue
             }
-            // A disc's edge passes 0.15 of the size from its box's corner; a rounded square's (corner radius about
-            // 0.22) passes 0.06 from it.
-            let corners = [(0.1, 0.1), (0.9, 0.1), (0.1, 0.9), (0.9, 0.9)]
-            let rims = [(0.5, 0.06), (0.5, 0.94), (0.06, 0.5), (0.94, 0.5)]
-            guard !corners.contains(where: inFill), rims.allSatisfy(inFill) else { continue }
+            // A rounded square with a glyph is an app's or a Settings row's icon, not a button.
+            guard round || aspect >= 1.4 else { continue }
             // The glyph: what isn't fill well inside the rim.
             let cx = Double(minX[id] + maxX[id]) / 2, cy = Double(minY[id] + maxY[id]) / 2
-            let r = Double(min(bw, bh)) / 2 * 0.8
+            let rx = Double(bw) / 2 - Double(bh) * 0.1, ry = Double(bh) / 2 * 0.8
             var gx0 = Int.max, gy0 = Int.max, gx1 = -1, gy1 = -1, count = 0
             for y in minY[id]...maxY[id] {
-                for x in minX[id]...maxX[id] where !isFill(y * w + x) {
-                    guard hypot(Double(x) - cx, Double(y) - cy) < r else { continue }
+                for x in minX[id]...maxX[id] where !isFill(x, y) {
+                    let dx = (Double(x) - cx) / rx, dy = (Double(y) - cy) / ry
+                    guard round ? hypot(Double(x) - cx, Double(y) - cy) < Double(min(bw, bh)) / 2 * 0.8 : (abs(dx) < 1 && abs(dy) < 1) else { continue }
                     count += 1
                     gx0 = min(gx0, x); gx1 = max(gx1, x); gy0 = min(gy0, y); gy1 = max(gy1, y)
                 }
@@ -331,9 +399,14 @@ private struct RegionMap {
             guard count >= 8 else { continue }
             let glyph = CGRect(x: gx0, y: gy0, width: gx1 - gx0 + 1, height: gy1 - gy0 + 1)
             guard glyph.width <= Double(bw) * 0.8, glyph.height <= Double(bh) * 0.8 else { continue }
-            found.append((CGRect(x: minX[id], y: minY[id], width: bw, height: bh), glyph))
+            found.append(Shape(frame: box, round: round, glyph: glyph, text: nil))
         }
-        return found
+        // A shape inside another (a disc on a capsule) is the smaller button; the outer one is its track.
+        return found.filter { shape in
+            !found.contains { other in
+                other.frame != shape.frame && shape.frame.insetBy(dx: -1, dy: -1).contains(other.frame)
+            }
+        }
     }
 }
 
