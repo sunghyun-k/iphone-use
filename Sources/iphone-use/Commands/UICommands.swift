@@ -19,7 +19,8 @@ struct UICommand: ParsableCommand {
               [circle button] / [button] a filled button with a glyph
               [icon]                     an unrecognized icon; --icons asks the Mac's on-device
                                          model to name it: [icon: paper plane]
-            A popup over a dimmed screen is announced after the list, with the lines that are on it.
+            A popup or a tip overlay over a dimmed screen is announced after the list, with the lines
+            that are on it.
             Only what's on screen is listed; scroll to see more. On the same screen refs stay the
             same; on a new screen numbering restarts at 1.
             """

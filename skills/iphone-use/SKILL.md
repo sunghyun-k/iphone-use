@@ -212,7 +212,14 @@ When a promotion, coupon or consent popup covers a dimmed screen, the list ends 
 - Only the lines named there can be pressed. The rest of the list is the screen behind.
 - Close it with its `[xmark]` line, or the `[circle button]` beside the card (a ✕ on a translucent
   disc), unless the task is about the popup.
-- The note doesn't appear for system alerts (permission prompts), whose buttons are ordinary lines,
+- A tip or tutorial drawn straight on a dimmed screen, with no card, gets this note instead:
+
+  ```
+  (the screen is dimmed under an overlay, like a tip or a tutorial. On it: @t41 @t43. The other lines are behind it and won't react until it's closed; a button on it (OK, Close, ✕) usually closes it)
+  ```
+
+  The lines named there are its text, its buttons, and the control it points at.
+- Neither note appears for system alerts (permission prompts), whose buttons are ordinary lines,
   or in dark mode. If a press or scroll changes nothing, look at the screenshot for a popup.
 
 ### The screenshot

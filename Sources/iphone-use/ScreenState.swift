@@ -48,27 +48,12 @@ enum ScreenState {
     static func popup(in bitmap: PointBitmap) -> [CGRect]? {
         let w = bitmap.w, h = bitmap.h
         let top = h * 6 / 100
-        // The dimmed white: the most common neutral gray.
-        var grays = [Int](repeating: 0, count: 256)
-        var total = 0
-        for y in stride(from: top, to: h, by: 2) {
-            for x in stride(from: 0, to: w, by: 2) {
-                let c = bitmap.color(x, y)
-                total += 1
-                if max(c.0, c.1, c.2) - min(c.0, c.1, c.2) <= 10 { grays[(c.0 + c.1 + c.2) / 3] += 1 }
-            }
-        }
-        // A window of 9 levels: the dimmed page isn't exactly one value (cards, separators).
-        var best = (level: 0, count: 0)
-        for level in 70...190 {
-            let count = grays[(level - 4)...(level + 4)].reduce(0, +)
-            if count > best.count { best = (level, count) }
-        }
-        guard best.count * 100 >= total * 10 else { return nil }
-        // Nothing brighter may be as common: on a page that simply has a gray area, white is.
-        let brighter = grays[min(255, best.level + 20)...].reduce(0, +)
-        guard brighter * 2 < best.count else { return nil }
-        let cap = best.level + 22
+        guard let dim = dimming(in: bitmap) else { return nil }
+        // Nothing brighter may be as common: on a page that simply has a gray area, white is. Not half
+        // as common was too strict: a large coupon card made white 57% as common as the dimmed gray, and
+        // its popup went unnoticed (PITFALLS #70). The checks below still need one card and few strays.
+        guard dim.brighter < 1 else { return nil }
+        let cap = dim.cap
 
         // Cells of 4 pt that are mostly brighter than the layer allows.
         let cell = 4
@@ -136,6 +121,50 @@ enum ScreenState {
         guard stray * 100 <= screen * 3 else { return nil }
         let px = CGFloat(bitmap.scale)
         return ([card.rect] + pieces).map { CGRect(x: $0.minX * px, y: $0.minY * px, width: $0.width * px, height: $0.height * px) }
+    }
+
+    /// The dimmed white behind a popup or an overlay: the most common neutral gray between 70 and 190,
+    /// its share of the screen, how common anything brighter is next to it, and the brightest a pixel
+    /// under the layer can be (`cap`). Nil when no gray is common enough (10% of the screen).
+    static func dimming(in bitmap: PointBitmap) -> (cap: Int, share: Double, brighter: Double)? {
+        let w = bitmap.w, h = bitmap.h
+        let top = h * 6 / 100
+        var grays = [Int](repeating: 0, count: 256)
+        var total = 0
+        for y in stride(from: top, to: h, by: 2) {
+            for x in stride(from: 0, to: w, by: 2) {
+                let c = bitmap.color(x, y)
+                total += 1
+                if max(c.0, c.1, c.2) - min(c.0, c.1, c.2) <= 10 { grays[(c.0 + c.1 + c.2) / 3] += 1 }
+            }
+        }
+        // A window of 9 levels: the dimmed page isn't exactly one value (cards, separators).
+        var best = (level: 0, count: 0)
+        for level in 70...190 {
+            let count = grays[(level - 4)...(level + 4)].reduce(0, +)
+            if count > best.count { best = (level, count) }
+        }
+        guard total > 0, best.count * 100 >= total * 10 else { return nil }
+        let brighter = grays[min(255, best.level + 20)...].reduce(0, +)
+        return (best.level + 22, Double(best.count) / Double(total), Double(brighter) / Double(best.count))
+    }
+
+    /// The lines drawn over a dimmed screen with no card under them: a tip or a tutorial's coach mark
+    /// ("try the map", an OK button, the control it points at left bright). Trip planning results had
+    /// one; `popup` found no card, and the list said nothing (PITFALLS #70). Indices into `lines`
+    /// (pixel frames). Only when the dimmed gray covers half the screen and almost nothing else is
+    /// bright, so a page that simply has a gray area isn't taken for one.
+    static func overlay(_ lines: [TextRecognizer.Line], in bitmap: PointBitmap) -> [Int] {
+        guard let dim = dimming(in: bitmap), dim.share >= 0.5, dim.brighter < 0.1 else { return [] }
+        let px = CGFloat(bitmap.scale)
+        let bright = lines.indices.filter { index in
+            let f = lines[index].frame
+            let frame = CGRect(x: f.minX / px, y: f.minY / px, width: f.width / px, height: f.height / px)
+            guard let (ink, ground) = colors(of: frame, in: bitmap) else { return false }
+            return max(ink.0, ink.1, ink.2) > dim.cap || max(ground.0, ground.1, ground.2) > dim.cap
+        }
+        // Most of the screen is behind the layer; if most lines are bright, it's not a layer.
+        return bright.count * 2 <= lines.count ? bright : []
     }
 
     /// A line's text color and the color behind it, in points.

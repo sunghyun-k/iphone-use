@@ -41,6 +41,8 @@ struct UIState: Codable {
     var keyboard = false
     /// A popup over a dimmed screen (`ScreenState.popup`): the card, then pieces beside it. Pixels.
     var popup: [[Double]]?
+    /// Lines drawn over a dimmed screen with no card under them (`ScreenState.overlay`). Pixels.
+    var overlay: [[Double]]?
     var nextRef = 1
     /// Pixels per point for screens of `scaleSize` (`[width, height]`), so it's asked once, not per read.
     var scale: Int?
@@ -148,7 +150,7 @@ final class UIScreen {
 
     /// The text lines of a screenshot in reading order, without the status bar and the keyboard keys, with
     /// the controls that have no text (`[toggle on] Wi-Fi`, `[chevron left]`) in among them.
-    static func read(_ image: CGImage, scale: Int) throws -> (lines: [TextRecognizer.Line], keyboard: Bool, popup: [CGRect]?) {
+    static func read(_ image: CGImage, scale: Int) throws -> (lines: [TextRecognizer.Line], keyboard: Bool, popup: [CGRect]?, overlay: [CGRect]) {
         let height = CGFloat(image.height)
         var lines = try TextRecognizer.lines(in: image)
         // Found against all the text, so glyphs OCR already read (status items included) aren't repeated.
@@ -288,7 +290,8 @@ final class UIScreen {
         for piece in popup?.dropFirst() ?? [] where !lines.contains(where: { $0.frame.intersects(piece) || ($0.button?.intersects(piece) ?? false) }) {
             lines.append(TextRecognizer.Line(text: "[circle button]", frame: piece))
         }
-        return (readingOrder(lines), keyboard, popup)
+        let overlay = popup == nil ? bitmap.map { bitmap in ScreenState.overlay(lines, in: bitmap).map { lines[$0].frame } } ?? [] : []
+        return (readingOrder(lines), keyboard, popup, overlay)
     }
 
     /// A pager's dots as one line, `[page dots] 13`: a carousel of thirteen pictures listed thirteen
@@ -595,9 +598,9 @@ final class UIScreen {
 
     /// Reads `image`, matches it against the stored list, stores the result and saves the screenshot.
     func observe(
-        _ image: CGImage, read: (lines: [TextRecognizer.Line], keyboard: Bool, popup: [CGRect]?)? = nil
+        _ image: CGImage, read: (lines: [TextRecognizer.Line], keyboard: Bool, popup: [CGRect]?, overlay: [CGRect])? = nil
     ) throws -> Report {
-        var (lines, keyboard, popup) = try read ?? Self.read(image, scale: pointScale(for: image))
+        var (lines, keyboard, popup, overlay) = try read ?? Self.read(image, scale: pointScale(for: image))
         try saveImage(image)
         let old = state
         // An icon named by `ui --icons` keeps its name while it stays put and looks the same, so the next read doesn't report
@@ -620,6 +623,7 @@ final class UIScreen {
         state.height = image.height
         state.keyboard = keyboard
         state.popup = popup.map { $0.map { [Double($0.minX), Double($0.minY), Double($0.width), Double($0.height)] } }
+        state.overlay = overlay.isEmpty ? nil : overlay.map { [Double($0.minX), Double($0.minY), Double($0.width), Double($0.height)] }
 
         guard sameSize, !old.entries.isEmpty else { return reset(lines, image) }
 
@@ -839,6 +843,11 @@ final class UIScreen {
     /// What holds for the whole screen: the keyboard, a popup.
     func printNotes() {
         if state.keyboard { print("(the on-screen keyboard is up; its keys are left out)") }
+        if let rects = state.overlay?.map({ CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) }) {
+            let on = state.entries.filter { entry in rects.contains { $0.intersects(entry.frame.insetBy(dx: 2, dy: 2)) } }
+            let refs = on.map { "@t\($0.ref)" }.joined(separator: " ")
+            print("(the screen is dimmed under an overlay, like a tip or a tutorial. On it: \(refs). The other lines are behind it and won't react until it's closed; a button on it (OK, Close, ✕) usually closes it)")
+        }
         guard let rects = state.popup?.map({ CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) }), let card = rects.first else { return }
         let on = state.entries.filter { entry in rects.contains { $0.contains(CGPoint(x: entry.frame.midX, y: entry.frame.midY)) } }
         let refs = on.map { "@t\($0.ref)" }.joined(separator: " ")
