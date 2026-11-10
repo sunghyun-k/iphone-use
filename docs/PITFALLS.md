@@ -29,7 +29,7 @@ already broken once.
 | Daemon | #28, #50, #62 (dead cached tunnel), #67 (keeping the device awake), #71 (relative paths) |
 | CoreDevice services and features (finding them, envelopes, get/set) | #12, #14, #21, #22 |
 | DTX (Instruments, used to revive a stuck launch daemon) | #5, #6, #7, #20 |
-| Apps and URLs | #20, #21, #29, #65 (a name with a dot) |
+| Apps and URLs | #20, #21, #29, #65 (a name with a dot), #73 (restart) |
 | Screenshots and waiting for the screen to settle | #13, #25, #34, #49, #69 |
 | Touch coordinates, panels and the grid | #8, #9, #10, #23, #51, #53 |
 | HID delivery and timing (lost taps and keys) | #15, #16, #17, #18, #50, #54 |
@@ -1247,3 +1247,11 @@ made only of short numbers and signs, with at least one + or −, into its words
 count, `[plus]`. "•" counts as a − only in such a line, so a bulleted sentence is left alone. Vision
 gave no box for the "+" of "• 1 +" (it did for "- 2 +"); a word without one gets a slice of the
 line's box by character position.
+
+### 73. `launch --restart` failed with "process identifier … could not be determined"
+
+`launch <app> --restart` on a running third-party app failed with "The process identifier of the
+launched application could not be determined. It may have already terminated." A second
+`launch --restart` a moment later worked. `terminateExisting` seems to race with the app's own exit.
+`AppService.launch` now waits 1 s after that error and launches once more without
+`terminateExisting`; the old process is gone by then, so the app still starts fresh.

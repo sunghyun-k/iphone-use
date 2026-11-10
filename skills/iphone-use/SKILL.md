@@ -396,8 +396,9 @@ There is no back command. The back button is usually at the top left:
 - **Sheets and popups have Close, Cancel or Done instead**, usually at the top. `ui --find Cancel`.
 - **Root screens have none.** In an app with a tab bar, switch tabs, or leave with `home` / `launch`.
 - **A screen in search mode** (e.g. Settings showing search results) can show two ✕ buttons. The one
-  inside the field (`[xmark circle fill]`) only clears the text. The one outside it (`[xmark]`, or
-  `Cancel`; on iOS 26+ in the bottom search bar) leaves search mode. `key esc` only dismisses the
+  inside the field (`[xmark circle fill]`) only clears the text. The one outside it (`[xmark]`, a
+  plain `X` line, or `Cancel`; on iOS 26+ in the bottom search bar) leaves search mode. An app can
+  reopen in search mode with the last query still in the field; `type @tN "…" --clear` replaces it. `key esc` only dismisses the
   keyboard, or does nothing.
 
 Don't swipe from the left edge to go back: the swipe can land on a list row and run its swipe action.

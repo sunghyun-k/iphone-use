@@ -93,6 +93,7 @@ For development, `swift build && ./.build/debug/iphone-use --help`.
 ```sh
 iphone-use devices                        # name, UDID and connection (usb / wifi)
 iphone-use daemon &                       # optional; keeps connections warm (0.25 s -> 0.03 s per command)
+                                          # and keeps a device in use from auto-locking
 
 iphone-use ui                             # text lines on screen + gridded screenshot
 iphone-use ui --find "Search"             # only lines containing the text
@@ -174,7 +175,8 @@ changing code that looks strange; most of it is there for a reason.
   gets a warning. Other text, such as emoji, goes through `paste`, which makes the device show a
   paste-permission prompt every time.
 - **Not everything gets a line.** `ui` lists text, switches, check boxes, sliders, common icons and
-  filled buttons, marks the selected tab or segment, and says when a popup covers the screen. All of
+  filled buttons and steppers, marks the selected tab or segment, and says when a popup or a tip
+  overlay covers the screen. All of
   that is judged from pixels, so it can be wrong. Images, a slider at either end, and icons over a
   photo or video are only in the saved screenshot; tap them with `touch --cell`.
 - **Password fields are blind.** While one has focus, the keyboard and the field's content are absent

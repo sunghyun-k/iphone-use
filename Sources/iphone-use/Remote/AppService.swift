@@ -40,7 +40,21 @@ enum AppService {
             "standardIOIdentifiers": .dictionary([:]),
         ]
 
-        let output = try invokeRecovering(rsd: rsd, input: input)
+        let output: [String: XPCObject]
+        do {
+            output = try invokeRecovering(rsd: rsd, input: input)
+        } catch CoreDeviceService.Failure.invocationFailed(_, let detail)
+            where restart && detail.contains("process identifier")
+        {
+            // A restart of an app that was running can fail with "The process identifier of the launched
+            // application could not be determined", while launching it again a moment later works
+            // (PITFALLS #73). The old process is gone by then, so the retry doesn't terminate anything.
+            Thread.sleep(forTimeInterval: 1)
+            var retry = input
+            options["terminateExisting"] = .bool(false)
+            retry["options"] = .dictionary(options)
+            output = try invokeRecovering(rsd: rsd, input: retry)
+        }
         guard let token = output["processToken"]?.dictionaryValue,
             let pid = token["processIdentifier"]?.intValue
         else {
