@@ -15,10 +15,13 @@ enum SessionPool {
 
     private nonisolated(unsafe) static var cached: [String: RemoteServiceDiscovery] = [:]
 
-    static func rsd(udid: String?) throws -> RemoteServiceDiscovery {
+    /// `touch` marks the device as in use, so the daemon keeps it from auto-locking for a while
+    /// (`KeepAwake`). Only keep-awake itself passes false, or it would extend its own window forever.
+    static func rsd(udid: String?, touch: Bool = true) throws -> RemoteServiceDiscovery {
         guard keepAlive else { return try RemoteServiceDiscovery(udid: udid) }
 
         let key = udid ?? ""
+        if touch { KeepAwake.touched(key) }
         if let existing = cached[key] { return existing }
         let fresh = try RemoteServiceDiscovery(udid: udid)
         cached[key] = fresh

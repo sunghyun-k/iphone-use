@@ -38,7 +38,9 @@ This is the user's personal device, with their messages, accounts and money on i
   apps.
 - **Delete or report only what the user named exactly.** In a confirmation, don't pick options that
   send something outward (like `Report Junk`) unless the user said so.
-- **Never enter the passcode.** On the lock screen, ask the user to unlock.
+- **Enter the passcode or a password only when the user explicitly allows it.** Otherwise, on the
+  lock screen or a password prompt, ask the user to unlock or sign in. Never repeat it in your
+  replies, files or logs.
 - **Never enter credentials, API keys or personal data** from the conversation into the device,
   unless explicitly asked.
 - **Private data on screen** (conversations, message previews, verification codes, accounts, serial
@@ -67,9 +69,6 @@ connection errors.
 4. Once paired, the device also works **over Wi-Fi on the same network, without the cable**. The
    `devices` connection column shows `wifi`.
 5. The device needs iOS 27 or later.
-6. Suggest turning on **Do Not Disturb** (Control Center) while an agent works. A notification banner
-   covers the top of the screen for a few seconds, and a tap there (a back button, a toolbar button)
-   opens the notification's app instead.
 
 ## Getting started
 
@@ -89,9 +88,14 @@ iphone-use ui                          # always look at the current screen first
     buttons have no lines, so look at the screenshot before deciding the screen is empty.
   - If the user says the device was unlocked a moment ago and needs no passcode, `home` (a swipe up)
     dismisses the lock screen and shows the last app. If a passcode screen appears instead, stop
-    and ask.
-- **Devices with a short Auto-Lock (e.g. 2 minutes) lock while you work.** Don't change Auto-Lock
-  without the user's permission.
+    and ask, unless the user has allowed you to enter the passcode.
+- **Before you start, suggest turning on Do Not Disturb** (Control Center) for the time you work. A
+  notification banner covers the top of the screen for a few seconds, and a tap there (a back button,
+  a toolbar button) opens the notification's app instead. The user can turn it on, or let you; if you
+  turned it on, turn it off when you finish.
+- **Auto-Lock is handled by the daemon.** While it runs, a device that got a command in the last 5
+  minutes doesn't lock; afterwards the user's own Auto-Lock applies again. Without the daemon, a
+  device with a short Auto-Lock locks while you work. Don't change Auto-Lock.
 - Timing with the daemon running: `ui` takes about 1 s; an action plus its result about 2–3 s.
 
 ## The basic loop: read the list, look at the screenshot, press
@@ -536,8 +540,8 @@ iphone-use press @t32          # → confirmation, if the app asks for one
 
 ## When you finish
 
-- Restore everything you changed (`settings`, `location`, input source, clipboard). Tell the user
-  about anything you couldn't restore.
+- Restore everything you changed (`settings`, `location`, input source, clipboard, Do Not
+  Disturb). Tell the user about anything you couldn't restore.
 - `open https://…` opens a **new tab** in Safari. When you're done, close just that tab with
   `key cmd+w` while Safari is in front.
 - Ideally return to the screen you started from (usually the home screen): `home`.
@@ -548,7 +552,7 @@ iphone-use press @t32          # → confirmation, if the app asks for one
 
 | Symptom | What to do |
 |---|---|
-| "The screen is off" | Use `button home`. On the lock screen, ask the user to unlock |
+| "The screen is off" | Use `button home`. On the lock screen, ask the user to unlock (or enter the passcode if they allowed it) |
 | Listed in `devices`, but `ui`/`screenshot` give connection errors or time out | Developer Mode may be off. Walk the user through "Device setup" step 3 |
 | "More than one device" | Add `--udid "name"` |
 | A command times out or says "connection lost" | Try once more. With the daemon running, bypass it with `--no-daemon`, or `daemon --stop` and start it again |

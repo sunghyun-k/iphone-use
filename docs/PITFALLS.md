@@ -26,7 +26,7 @@ already broken once.
 | Topic | Entries |
 |---|---|
 | Connection, tunnel, sharing the device with Xcode | #19, #20, #26, #27, #44, #55 |
-| Daemon | #28, #50, #62 (dead cached tunnel) |
+| Daemon | #28, #50, #62 (dead cached tunnel), #67 (keeping the device awake) |
 | CoreDevice services and features (finding them, envelopes, get/set) | #12, #14, #21, #22 |
 | DTX (Instruments, used to revive a stuck launch daemon) | #5, #6, #7, #20 |
 | Apps and URLs | #20, #21, #29, #65 (a name with a dot) |
@@ -58,6 +58,8 @@ Open problems, with the entry that describes each:
 - A popup is only noticed over a dimmed light page: not in dark mode, not a system alert (#66).
 - A check box whose states differ only in color, and a selection shown only by weight, aren't
   read (#66).
+- Do Not Disturb can't be turned on by a command, so notification banners still need the user
+  (#67, #46).
 - The passcode screen captures as black, so it's reported as "screen is off" (#63).
 - A custom-drawn control can get a wrong symbol name (#64). Home-screen icon artwork gives `[icon]`
   lines (#62).
@@ -1131,3 +1133,27 @@ third-party apps for false positives. A `ui` still takes 0.6–0.9 s.
 
 Not fixed: a slider at either end. Selection shown only by weight or size. Tabs that OCR merges into
 one line ("Chicken Chinese" as a single line) can hide which one is selected. A popup in dark mode.
+
+### 67. Keeping the device from auto-locking: input works, settings and power assertions don't
+
+An agent that thinks for a minute between commands lost the device to a short Auto-Lock. Asking the
+user to set Auto-Lock to Never works but is one more chore, so we looked for a way to hold it off.
+
+- **No setting to change.** Neither CoreDevice's features and actions nor the lockdown services the
+  device exports cover Auto-Lock or Focus / Do Not Disturb.
+- **A power assertion doesn't hold the screen.** `com.apple.mobile.assertion_agent` answers
+  `CommandCreateAssertion` with `ErrorKey: InvalidRequest` for `PreventUserIdleDisplaySleep` and
+  accepts `PreventUserIdleSystemSleep`, but with that held and Auto-Lock at 30 s the screen still went
+  off within 75 s. Over USB this service needs the TLS of its `AMDServiceConnection` for real (raw
+  bytes get a TLS alert back), unlike the accessibility service (`CMobileDevice.c`); its `.shim.remote`
+  can't be opened (#20).
+- **Attention Aware Features hide the result.** With them on and the owner in front of the phone, the
+  screen didn't go off at all, with or without anything sent. Test with them off.
+- **What works: an all-released keyboard report** on the keyboard surface (#11). With Auto-Lock at
+  30 s the screen went off 40–60 s after the last input; one report every 20–25 s kept it on for
+  175 s. The report types nothing, the on-screen keyboard stays up with its input source unchanged,
+  and a screen that is already off stays off.
+
+The daemon sends one every 20 s to each device that got a command in the last 5 minutes
+(`KeepAwake`, `daemon --keep-awake`). It only runs in the daemon; a plain CLI run doesn't keep the
+device awake between commands.

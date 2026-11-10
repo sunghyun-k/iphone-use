@@ -17,6 +17,8 @@ struct DaemonCommand: ParsableCommand {
             Runs in the foreground; append `&` yourself to background it.
             One daemon serves every device — each command picks its device with its own --udid.
             Check it with `daemon --status`; stop it with `daemon --stop`.
+            While it runs, a device that got a command in the last 5 minutes doesn't auto-lock
+            (--keep-awake). A screen that is already off stays off.
             """
     )
 
@@ -33,6 +35,11 @@ struct DaemonCommand: ParsableCommand {
 
     @Option(name: .long, help: "Exit after this many seconds with no requests. 0 keeps it running.")
     var idleTimeout: Double = 600
+
+    @Option(
+        name: .long,
+        help: "Keep a device from auto-locking for this many seconds after its last command. 0 turns it off.")
+    var keepAwake: Double = 300
 
     @Flag(name: .long, help: "Stop the running daemon.")
     var stop = false
@@ -102,25 +109,32 @@ struct DaemonCommand: ParsableCommand {
         SessionPool.keepAlive = true
         FileHandle.standardError.write(Data("Daemon started: \(socket)\n".utf8))
 
+        KeepAwake.window = keepAwake
+        var lastRequest = Date()
         while true {
-            if !waitForConnection(listener) {
+            KeepAwake.tick()
+            let idleLeft = idleTimeout > 0 ? idleTimeout - Date().timeIntervalSince(lastRequest) : nil
+            if let idleLeft, idleLeft <= 0 {
                 FileHandle.standardError.write(Data("Idle timeout, exiting.\n".utf8))
                 return
             }
+            guard waitForConnection(listener, upTo: [idleLeft, KeepAwake.secondsUntilDue].compactMap { $0 }.min())
+            else { continue }
             let client = accept(listener, nil, nil)
             guard client >= 0 else { continue }
+            lastRequest = Date()
             let keepGoing = handle(client)
             close(client)
             if !keepGoing { return }
         }
     }
 
-    /// To measure idle time, wait with poll instead of blocking in accept.
-    private func waitForConnection(_ listener: Int32) -> Bool {
-        guard idleTimeout > 0 else { return true }
+    /// Waits with poll instead of blocking in accept, so the loop can measure idle time and wake up
+    /// for keep-awake. False when the time ran out with no connection; nil waits indefinitely.
+    private func waitForConnection(_ listener: Int32, upTo seconds: TimeInterval?) -> Bool {
         var descriptor = pollfd(fd: listener, events: Int16(POLLIN), revents: 0)
-        let ready = poll(&descriptor, 1, Int32(idleTimeout * 1000))
-        return ready > 0
+        let timeout = seconds.map { Int32(max(0, $0) * 1000) } ?? -1
+        return poll(&descriptor, 1, timeout) > 0
     }
 
     /// Handles one request. Returns false to shut the daemon down.
