@@ -161,7 +161,9 @@ enum ScreenState {
             let f = lines[index].frame
             let frame = CGRect(x: f.minX / px, y: f.minY / px, width: f.width / px, height: f.height / px)
             guard let (ink, ground) = colors(of: frame, in: bitmap) else { return false }
-            return max(ink.0, ink.1, ink.2) > dim.cap || max(ground.0, ground.1, ground.2) > dim.cap
+            // Well above the cap: a dimmed blue badge with white text came just over it and was listed as
+            // on the tip. What a tip draws is near white.
+            return max(ink.0, ink.1, ink.2) > dim.cap + 40 || max(ground.0, ground.1, ground.2) > dim.cap + 40
         }
         // Most of the screen is behind the layer; if most lines are bright, it's not a layer.
         return bright.count * 2 <= lines.count ? bright : []
