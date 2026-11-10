@@ -12,11 +12,14 @@ The rules that bite first. Details are in the sections below.
    `dev`. Never commit to `main`; only `scripts/release.sh` moves it.
 2. **Language:** reply in the user's language; write code, comments, docs and commits in English.
 3. **Odd code:** before changing it, read the `PITFALLS #N` entry it cites in `docs/PITFALLS.md`.
+   That file has an index by topic at the top.
 4. **Real devices are personal devices:**
    - pass `--udid`
    - look at the screen before any input
    - never approve prompts
    - restore what you change
+
+   Only the owner can relax these, for a device they name (see "Verifying on a real device").
 5. **Output is an interface:**
    - `SKILL.md` quotes command output, so changing output means updating `SKILL.md` and a minor
      version bump.
@@ -39,7 +42,8 @@ from screenshots with OCR on the Mac and sends touches and keys over HID. There 
 **observation, not documentation, is the source of truth.**
 [`docs/PITFALLS.md`](docs/PITFALLS.md) records why things are the way they are, as numbered entries
 that code comments cite as `PITFALLS #N`. **Read the relevant entry before "fixing" code that looks
-odd.** Most of those spots have already burned someone once.
+odd.** Most of those spots have already burned someone once. Entries for the accessibility path that
+OCR replaced are in [`docs/PITFALLS-archive.md`](docs/PITFALLS-archive.md); no code cites them.
 
 ## Build and run
 
@@ -63,8 +67,14 @@ Sources/iphone-use/
   UIScreen.swift     Basis of ui/press/type: OCR line lists with @t refs, finding a line again, post-action diff
   TextRecognizer.swift  Screenshot OCR (Vision) and on-screen keyboard detection
   ScreenElements.swift  Controls without text, by shape: switches and their state, SF Symbol icons
+  ScreenState.swift  State read from pixels: popup over a dimmed screen, selected item, sliders
   ScreenGrid.swift   Named grid for screenshot --grid and cell math for touch/swipe --cell
+  IconNamer.swift    Names unrecognized icons with the Mac's on-device model (ui --icons)
   HangulKeys.swift   Hangul -> Dubeolsik key positions (text/type)
+  KeyboardLanguage.swift  Which script the on-screen keyboard shows, and switching it
+  OnScreenKeys.swift  Typing by tapping the on-screen keys where the HID keys type the wrong script
+  DeviceCtl.swift    Runs `xcrun devicectl` (app list over Wi-Fi, mounting the DDI)
+  MobileDevice.swift  USB-only device lookup and lockdown services (see the traps below)
 Sources/CMobileDevice/  C bindings for MobileDevice.framework
 Sources/CDTXBridge/     Objective-C bridge to DTXConnectionServices (Instruments, to revive a stuck launch daemon)
 skills/iphone-use/SKILL.md          Agent-facing usage guide (see "Skill changes")
@@ -72,7 +82,8 @@ skills/iphone-use/scripts/iphone-use  Wrapper that finds or builds the CLI (see 
 bin/iphone-use          Claude Code puts a plugin's bin/ on PATH; forwards to the wrapper
 .claude-plugin/         plugin.json + marketplace.json (this repo is its own marketplace)
 scripts/release.sh      Cuts a release (see "Releasing")
-docs/PITFALLS.md        Numbered reverse-engineering notes and dead ends
+docs/PITFALLS.md        Numbered reverse-engineering notes and dead ends, with a topic index
+docs/PITFALLS-archive.md  Retired entries (the accessibility path)
 ```
 
 Screen capture and input go through RemoteXPC, over sockets that CoreDeviceService hands out
@@ -86,8 +97,10 @@ Device-specific traps:
   If you touch input, connection or teardown ordering, test on Wi-Fi too.
 - **The iPad's touch panel has a different orientation from its framebuffer** (PITFALLS #23). If you
   touch coordinate conversion, test on an iPad.
-- **Keyboard layouts differ per device** (PITFALLS #11). If you change typing, try it on devices with
-  different layouts.
+- **What the HID keys type differs per device and per app** (PITFALLS #11, #58, #64). If you change
+  typing, try Hangul, Latin and mixed text in an app where the keys type Hangul (Notes) and in one
+  where they type Latin letters (Settings' search), and on an iPad, where the on-screen keys aren't
+  tapped.
 - **`MobileDevice` (`DeviceDiscovery`) only sees USB devices.** Don't use it for device lookup in new
   code.
 - **Never talk to the device's RSD yourself.** A second RSD peer displaces macOS's `remoted`, and Xcode
@@ -182,6 +195,17 @@ on it.
   anywhere, including chat.
 - **Destructive actions** (delete, send, report, purchase) only when the owner explicitly names the
   target.
+
+**A dedicated test device.** The owner may say a device is test equipment and lift some of these
+rules for it: approving prompts, changing settings, installing apps. That covers only the device
+and the rules they named, in that session. The rules about private data and about
+`stop_all_streams` always hold. Say at the end what you left changed (installed apps, granted
+permissions, settings).
+
+**A test app helps.** Built-in apps cover only some controls. An app of your own with one screen
+per kind of control, and a line of text that echoes every action, shows at once whether a press,
+drag or typed text arrived as intended (PITFALLS #64). Don't put third-party app specifics in the
+repository.
 
 ## Skill changes: verify with a subagent
 
@@ -281,6 +305,8 @@ When you learn something by observation that the code depends on:
 1. Add an entry at the end of `docs/PITFALLS.md` with the next number. Never renumber.
 2. Say what you tried, how it broke, and what the code does now.
 3. Cite it from the code as `PITFALLS #N`.
+4. Add its number to the topic index at the top of the file, and to "Known gaps" if it leaves
+   something unfixed.
 
 ## Commits and pull requests
 

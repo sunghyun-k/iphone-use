@@ -5,8 +5,8 @@ Wi-Fi. It is not a simulator tool.
 
 It is built for AI agents. `ui` takes a screenshot, reads its text on the Mac with Vision OCR, and
 returns every line as a numbered list, with the screenshot saved next to it under a labelled grid.
-Switches and common icons, which have no text, are found by their shape and listed too
-(`[toggle on] Wi-Fi`, `[chevron left]`). `press @t5` taps line 5 and reports what changed. Anything
+Controls that have no text are found by their shape and listed too: switches, check boxes, sliders,
+common icons, the selected tab (`[toggle on] Wi-Fi`, `[chevron left]`, `[selected] Today`). `press @t5` taps line 5 and reports what changed. Anything
 else is tapped by grid cell (`touch --cell G21`).
 
 iphone-use runs on the same private stack that Xcode's **Device Hub** uses. It needs no
@@ -14,17 +14,20 @@ entitlements, no `sudo`, no code signing, no app on the device and no WebDriverA
 paired device with Developer Mode on.
 
 > **Status:** experimental. The tool depends on undocumented Apple services that can change with any
-> Xcode or iOS release. Verified on an iPhone (iOS 27.2, over USB) with Xcode 27.
+> Xcode or iOS release. Verified with Xcode 27 on iPhones (iOS 27.2 and 27.3, one of them foldable)
+> and an iPad, over USB and Wi-Fi.
 
 ```console
 $ iphone-use ui
-23 text lines
+24 lines
 @t1	Settings	B2
 @t2	Search	C3
 @t3	Apple Account	C5
+@t4	Airplane Mode	C8
+@t5	[toggle off] Airplane Mode	I8
 @t9	General	C12
 …
-Screenshot: ~/.iphone-use/screen-<udid>.png (grid cells as in the third column; icons without text: touch --cell)
+Screenshot: ~/.iphone-use/screen-<udid>.png (grid cells as in the third column; [bracketed] lines are controls found by their shape — check the image when it matters)
 
 $ iphone-use press @t9
 Pressed @t9 "General"
@@ -110,10 +113,10 @@ With more than one device, pass `--udid <UDID or name>` to every command, for ex
 
 | Area | Commands | Notes |
 |---|---|---|
-| Read & act on text | `ui`, `press`, `type`, `home` | OCR text lines and shape-detected controls (switch state, SF Symbol icons) with refs (`@tN`), and a gridded screenshot. `ui --icons` names other icons with the Mac's on-device model (macOS 27, Apple Intelligence). After each action it waits for the screen to settle and prints a diff. `press` checks the line is still there before tapping, and also has `--hold`, `--trailing` (row-end ⓘ buttons and toggles) and `--swipe` (reveal swipe actions such as Delete). |
+| Read & act on the list | `ui`, `press`, `type`, `home` | OCR text lines and shape-detected controls (switch state, SF Symbol icons, buttons) with refs (`@tN`), and a gridded screenshot. `ui --icons` names other icons with the Mac's on-device model (macOS 27, Apple Intelligence); `ui --boxes` outlines every listed line on the screenshot. After each action the command waits for the screen to settle and prints a diff. `press` checks the line is still there before tapping, and also has `--hold`, `--double`, `--trailing` (row-end ⓘ buttons and toggles) and `--swipe` (reveal swipe actions such as Delete). `type` handles Hangul and Latin text in one call, and password fields with `--secure`. |
 | Apps | `apps`, `launch`, `open` | Launch by display name or bundle ID. Open any URL or deep link. |
 | Device settings | `settings`, `location` | Appearance, text size and accessibility toggles; simulated location. These are the same controls as Device Hub's settings panel. |
-| Screen & coordinates | `screenshot`, `wait`, `touch`, `swipe`, `scroll`, `text`, `key`, `button`, `paste`, `clipboard` | For icons and anything without text. Grid cells let you tap by name instead of guessing pixels. `touch`, `swipe` and `scroll` print the new list too. |
+| Screen & coordinates | `screenshot`, `wait`, `touch`, `swipe`, `scroll`, `text`, `key`, `button`, `paste`, `clipboard` | For anything that has no line. Grid cells let you tap by name instead of guessing pixels. `touch`, `swipe` and `scroll` print the new list too. |
 | Diagnostics | `devices`, `daemon`, `hid-info`, `invoke` | `invoke` calls any CoreDevice feature by name, for exploration. |
 
 Run `iphone-use <command> --help` for the options of each command.
@@ -146,6 +149,10 @@ Screens are captured with `com.apple.coredevice.screencaptureservice` and read o
 4. **HID.** Raw HID reports go to `com.apple.coredevice.hid.universalhidservice`: touchscreen service
    257 and keyboard 512. Hardware buttons go through `com.apple.coredevice.hid.indigo`.
 
+**Controls without text.** Switches, common SF Symbols and filled buttons have no text for OCR to read.
+They are found on the Mac from flat-color regions and symbol templates, in about 15 ms, and listed in
+brackets among the text.
+
 **Text, not guesses.** OCR once picked targets from a string the agent guessed, and pressed the wrong
 place when the guess matched several lines or a misread one. `ui` instead lists every line it read
 with a ref, so the agent picks a line it has seen. Before tapping, `press` checks that the pixels
@@ -159,12 +166,20 @@ changing code that looks strange; most of it is there for a reason.
 
 ## Limitations
 
-- **Keyboard layout is fixed per device.** HID sends key positions, and the device decodes them with
-  its own layout, regardless of the input source. `type`/`text` handle ASCII and Hangul (mapped to
-  Dubeolsik keys; Hangul also needs a Korean on-screen keyboard, which they switch to and back). Other
-  text goes through `paste`, which makes the device show a paste-permission prompt every time.
-- `ui` lists only text. Icons, toggle states and images are in the saved screenshot; tap them with
-  `touch --cell`.
+- **What the HID keys type depends on the device and the app.** HID sends key positions, and the
+  device decodes them with a layout the tool can't choose: Hangul in one app, Latin letters in
+  another. `type` and `text` handle ASCII and Hangul. They switch the on-screen keyboard to the
+  script being typed, and where the HID keys type the other script they tap the on-screen keys
+  instead. Tapping works on an iPhone held upright; on an iPad or in landscape a wrong result only
+  gets a warning. Other text, such as emoji, goes through `paste`, which makes the device show a
+  paste-permission prompt every time.
+- **Not everything gets a line.** `ui` lists text, switches, check boxes, sliders, common icons and
+  filled buttons, marks the selected tab or segment, and says when a popup covers the screen. All of
+  that is judged from pixels, so it can be wrong. Images, a slider at either end, and icons over a
+  photo or video are only in the saved screenshot; tap them with `touch --cell`.
+- **Password fields are blind.** While one has focus, the keyboard and the field's content are absent
+  from screen captures. `type --secure` types without seeing either.
+- **One finger.** Tap, double tap, long press and drag; no pinch or other multi-touch gestures.
 - OCR reads Korean and English. Other scripts may come out garbled.
 - No screen streaming. Screenshots were enough.
 
