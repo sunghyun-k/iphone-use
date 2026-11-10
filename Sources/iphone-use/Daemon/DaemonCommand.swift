@@ -158,7 +158,10 @@ struct DaemonCommand: ParsableCommand {
             return false
         }
 
+        let home = FileManager.default.currentDirectoryPath
+        if let cwd = request.cwd { FileManager.default.changeCurrentDirectoryPath(cwd) }
         let result = Self.execute(request.args)
+        FileManager.default.changeCurrentDirectoryPath(home)
         reply(client, result)
         return true
     }

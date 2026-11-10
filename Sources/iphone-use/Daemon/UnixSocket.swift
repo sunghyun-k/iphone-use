@@ -75,6 +75,10 @@ struct DaemonRequest: Codable {
     var args: [String]
     /// The sender binary's `BuildStamp`. If it differs from the daemon's, the daemon steps down rather than run old code.
     var build: String?
+    /// The sender's working directory. Relative paths (`screenshot -o shot.png`, `clipboard -o
+    /// backup.txt`) mean the sender's folder; run in the daemon's, a screenshot landed in whatever
+    /// folder the daemon was started from (PITFALLS #71).
+    var cwd: String?
 }
 
 /// A stamp identifying this binary (path + modification time).

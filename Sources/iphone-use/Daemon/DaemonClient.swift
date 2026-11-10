@@ -35,7 +35,7 @@ enum DaemonClient {
             return nil
         }
 
-        guard var payload = try? JSONEncoder().encode(DaemonRequest(args: args, build: BuildStamp.current))
+        guard var payload = try? JSONEncoder().encode(DaemonRequest(args: args, build: BuildStamp.current, cwd: FileManager.default.currentDirectoryPath))
         else { return nil }
         payload.append(UInt8(ascii: "\n"))
         UnixSocket.writeAll(fd, payload)

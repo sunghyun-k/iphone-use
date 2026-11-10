@@ -26,7 +26,7 @@ already broken once.
 | Topic | Entries |
 |---|---|
 | Connection, tunnel, sharing the device with Xcode | #19, #20, #26, #27, #44, #55 |
-| Daemon | #28, #50, #62 (dead cached tunnel), #67 (keeping the device awake) |
+| Daemon | #28, #50, #62 (dead cached tunnel), #67 (keeping the device awake), #71 (relative paths) |
 | CoreDevice services and features (finding them, envelopes, get/set) | #12, #14, #21, #22 |
 | DTX (Instruments, used to revive a stuck launch daemon) | #5, #6, #7, #20 |
 | Apps and URLs | #20, #21, #29, #65 (a name with a dot) |
@@ -38,7 +38,7 @@ already broken once.
 | Telling a keyboard from a keypad or a calendar; the suggestion bar | #31, #61, #63, #64, #65 |
 | Reading the screen: OCR lines, status items, the diff after an action | #48, #56, #62, #63, #64, #65, #66 |
 | Controls without text: switches, symbols, buttons by shape | #52, #59, #60, #61, #62, #63, #64, #65 |
-| State read from pixels: check boxes, selection, sliders, page dots, popups | #66 |
+| State read from pixels: check boxes, selection, sliders, page dots, popups | #66, #70 |
 | Naming icons with the on-device model | #57 |
 | Pressing the right thing (moved rows, banners, cell snapping) | #42, #46, #59, #61 |
 | iPad | #11, #23, #56 |
@@ -55,7 +55,7 @@ Open problems, with the entry that describes each:
 - Icons on a glass bar over a photo or video aren't found, and text behind a glass bar reads as
   noise (#52, #64).
 - A slider at 0% or 100% has no line, nor does a picker wheel's selected value (#63, #66).
-- A popup is only noticed over a dimmed light page: not in dark mode, not a system alert (#66).
+- A popup or a tip overlay is only noticed over a dimmed light page: not in dark mode, not a system alert (#66, #70).
 - A check box whose states differ only in color, and a selection shown only by weight, aren't
   read (#66).
 - Do Not Disturb can't be turned on by a command, so notification banners still need the user
@@ -1210,3 +1210,29 @@ that finished before the first frame):
 
 Cost: a navigation in Settings went from about 3.8 s to about 4.9 s with the daemon (one more
 capture). `launch --restart` of that delivery app takes about 8.5 s, but returns its home screen.
+
+### 70. Popups #66 missed: a large card, and a tip with no card
+
+Two dimmed screens in third-party apps got no note after the list:
+
+- **A large coupon card.** The page behind was dimmed to gray 128, the most common color (38% of
+  the screen), but the white card was big enough that brighter pixels were 57% as common as that
+  gray, and `popup` wanted them under half. Now they only have to be less common than the gray; the
+  card and stray checks that follow still keep an ordinary page with a gray area out.
+- **A tip with no card.** A results page was dimmed to gray 100 over 70% of the screen, with white
+  text ("check the map and favorites"), an outlined OK button and the pointed-at control left
+  bright. `popup` found no card of 3–75% of the screen. `ScreenState.overlay` now takes such a
+  screen (the gray covers at least half, anything brighter is under 10% as common) and names the
+  lines whose text or background is brighter than the layer allows. If half the lines or more are
+  bright, it's not a layer. The list gets its own note.
+
+Checked on that device: both screens get their note; Calculator, Clock, Settings, the App Store,
+Translate and five third-party apps' home screens get neither.
+
+### 71. Relative paths went to the daemon's folder
+
+The daemon runs each command in its own process, and that process's working directory is wherever
+the daemon was started. `screenshot -o shot.png` run from another folder wrote the file into the
+daemon's folder (here, the repository root), and `clipboard -o backup.txt` would put the clipboard
+backup there too, where the agent's own file tools don't look. A request now carries the client's
+working directory (`DaemonRequest.cwd`); the daemon switches to it for that command and back after.
