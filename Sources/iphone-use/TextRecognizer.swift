@@ -56,6 +56,28 @@ enum TextRecognizer {
                 }
                 if parts.count == words.count { return parts }
             }
+            // A stepper's − count + came out as one line ("- 2 +", "1 +"), so neither button had a ref
+            // and they could only be tapped by grid cell (PITFALLS #72). Each sign is its own button.
+            // A disabled − (an outlined circle) reads as "•", which is only taken for one here, among
+            // a count and a + or −.
+            if words.count > 1, words.contains(where: { ["+", "-", "−", "–"].contains(String($0)) }),
+                words.allSatisfy({ Self.stepperSigns[String($0)] != nil || ($0.count <= 3 && $0.allSatisfy(\.isNumber)) })
+            {
+                // Vision gave no box for the "+" of "1 +" while it did for "- 2 +"; then the line's box
+                // is cut by character position, which puts the sign at the end where the button is.
+                let whole = observation.boundingBox
+                let count = CGFloat(string.count)
+                return words.map { word in
+                    let text = Self.stepperSigns[String(word)] ?? String(word)
+                    if let box = (try? best.boundingBox(for: word.startIndex..<word.endIndex)).flatMap({ $0 }) {
+                        return line(text, box.boundingBox)
+                    }
+                    let start = CGFloat(string.distance(from: string.startIndex, to: word.startIndex))
+                    return line(text, CGRect(
+                        x: whole.minX + whole.width * start / count, y: whole.minY,
+                        width: whole.width * CGFloat(word.count) / count, height: whole.height))
+                }
+            }
             // A menu's check mark read as the first "word" of its row ("V Free", "~ Apple") goes on a
             // line of its own, where the symbol matcher names it like any other lone glyph.
             if words.count > 1, let mark = words.first, Self.checkMarks.contains(String(mark)),
@@ -91,6 +113,9 @@ enum TextRecognizer {
             return [line(string, observation.boundingBox)]
         }
     }
+
+    /// What OCR makes of a stepper's buttons, and how they're listed.
+    static let stepperSigns: [String: String] = ["+": "[plus]", "-": "[minus]", "−": "[minus]", "–": "[minus]", "•": "[minus]"]
 
     /// What OCR makes of a check mark at the start of a row.
     static let checkMarks: Set<String> = ["v", "V", "~", "√", "✓", "✔"]

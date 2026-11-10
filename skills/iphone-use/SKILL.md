@@ -153,6 +153,8 @@ iphone-use type @t2 "Battery" # tap the field (here its placeholder text) and ty
   flips the switch.
 - `[chevron left]`, `[plus]`, `[info circle]`, `[checkmark]`, `[magnifyingglass]` …: a common icon,
   named after its SF Symbol. `[chevron left]` near the top is usually the back button.
+- `[minus]` / `2` / `[plus]` on one row: a stepper. Press `[plus]` or `[minus]`; the count's line
+  shows the new value as `changed`.
 - `[circle button]` / `[button]`: a filled disc, or a capsule wider than high, with a glyph on it (a
   chat's send arrow on a yellow disc). The line covers the whole button.
   - When the glyph is a common symbol, the button is named after that instead (`[chevron left]` on a

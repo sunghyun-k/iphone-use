@@ -37,7 +37,7 @@ already broken once.
 | Typing: layouts, Hangul, on-screen keys, paste | #11, #18, #30, #32, #58, #63, #64, #68 |
 | Telling a keyboard from a keypad or a calendar; the suggestion bar | #31, #61, #63, #64, #65 |
 | Reading the screen: OCR lines, status items, the diff after an action | #48, #56, #62, #63, #64, #65, #66 |
-| Controls without text: switches, symbols, buttons by shape | #52, #59, #60, #61, #62, #63, #64, #65 |
+| Controls without text: switches, symbols, buttons by shape | #52, #59, #60, #61, #62, #63, #64, #65, #72 |
 | State read from pixels: check boxes, selection, sliders, page dots, popups | #66, #70 |
 | Naming icons with the on-device model | #57 |
 | Pressing the right thing (moved rows, banners, cell snapping) | #42, #46, #59, #61 |
@@ -1223,8 +1223,9 @@ Two dimmed screens in third-party apps got no note after the list:
   text ("check the map and favorites"), an outlined OK button and the pointed-at control left
   bright. `popup` found no card of 3–75% of the screen. `ScreenState.overlay` now takes such a
   screen (the gray covers at least half, anything brighter is under 10% as common) and names the
-  lines whose text or background is brighter than the layer allows. If half the lines or more are
-  bright, it's not a layer. The list gets its own note.
+  lines whose text or background is well above what the layer allows (40 levels over: a dimmed
+  blue badge with white text came just over the cap). If half the lines or more are bright, it's
+  not a layer. The list gets its own note.
 
 Checked on that device: both screens get their note; Calculator, Clock, Settings, the App Store,
 Translate and five third-party apps' home screens get neither.
@@ -1236,3 +1237,13 @@ the daemon was started. `screenshot -o shot.png` run from another folder wrote t
 daemon's folder (here, the repository root), and `clipboard -o backup.txt` would put the clipboard
 backup there too, where the agent's own file tools don't look. A request now carries the client's
 working directory (`DaemonRequest.cwd`); the daemon switches to it for that command and back after.
+
+### 72. A stepper's buttons came out as one line with its count
+
+A guest count stepper (− 2 +, with round buttons) was read as one OCR line, "- 2 +", or "• 1 +" when
+the − was disabled (an outlined circle reads as "•"). The list had one ref for the whole row, so
+neither button could be pressed by ref, only by grid cell. `TextRecognizer.lines` now splits a line
+made only of short numbers and signs, with at least one + or −, into its words: `[minus]`, the
+count, `[plus]`. "•" counts as a − only in such a line, so a bulleted sentence is left alone. Vision
+gave no box for the "+" of "• 1 +" (it did for "- 2 +"); a word without one gets a slice of the
+line's box by character position.
