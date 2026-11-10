@@ -96,7 +96,9 @@ iphone-use ui                          # always look at the current screen first
 - **Auto-Lock is handled by the daemon.** While it runs, a device that got a command in the last 5
   minutes doesn't lock; afterwards the user's own Auto-Lock applies again. Without the daemon, a
   device with a short Auto-Lock locks while you work. Don't change Auto-Lock.
-- Timing with the daemon running: `ui` takes about 1 s; an action plus its result about 2–3 s.
+- Timing with the daemon running: `ui` takes about 1 s; an action plus its result about 2–3 s. When
+  the action brings up a new screen, it waits a little longer for that screen to finish loading
+  (up to about 3 s more for a splash or a nearly empty page).
 
 ## The basic loop: read the list, look at the screenshot, press
 

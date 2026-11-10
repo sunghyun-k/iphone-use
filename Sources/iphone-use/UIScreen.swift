@@ -478,12 +478,60 @@ final class UIScreen {
         // If the reaction (press highlight, start of a transition) comes after the first capture, two frames
         // of the pre-input screen are taken as "settled".
         Thread.sleep(forTimeInterval: Self.reactionDelay)
-        let settle = try ScreenCapture.settled(rsd: rsd, timeout: 6)
+        var settle = try ScreenCapture.settled(rsd: rsd, timeout: 6)
         guard !ScreenCapture.isDark(settle.image) else { throw ScreenText.Failure.screenOff }
+        // A new screen often holds still while it loads (a splash, an article's blank page, a search's
+        // first results) and fills in a second later: the list showed 2–9 lines and the agent had to run
+        // `ui` again (PITFALLS #69). So a new screen gets another look a moment later, and settles again
+        // if it changed.
+        guard settle.transition || looksNew(settle.image) else { return settle }
+        // Looked at again until a look finds no big change: values and pictures filling in on a
+        // settings page cost a second settle for 1% of the screen, which read the same lines anyway.
+        var looks = 0
+        while looks < Self.maxLooks {
+            looks += 1
+            Thread.sleep(forTimeInterval: Self.lookAgainAfter)
+            let change = try ScreenCapture.changedShare(settle.image, try ScreenCapture.image(rsd: rsd), ignoring: settle.moving)
+            guard change.share >= Self.bigChange, try settleAgain(&settle) else { break }
+        }
+        settle.transition = true
         return settle
     }
 
+    /// Settles again after the screen changed. False if the screen went dark.
+    private func settleAgain(_ settle: inout ScreenCapture.Settle) throws -> Bool {
+        let next = try ScreenCapture.settled(rsd: rsd, timeout: 4)
+        guard !ScreenCapture.isDark(next.image) else { return false }
+        // The early frames show the loading screen, not this one: a frame from them was read for a
+        // moving banner, and the list showed the splash (`observeAfterAction`).
+        settle = ScreenCapture.Settle(image: next.image, early: [], stable: next.stable, moving: next.moving, transition: true)
+        return true
+    }
+
     private static let reactionDelay = 0.3
+    /// Before looking again. A capture itself takes 0.3–0.7 s, so the look lands about a second after
+    /// the screen first held still; a loading article filled in about then.
+    private static let lookAgainAfter = 0.2
+    /// Share of the screen that has to change for a second settle: a loading screen replaced by its
+    /// content changes far more.
+    private static let bigChange = 0.025
+    private static let maxLooks = 3
+    /// A new screen with fewer lines than this is watched for up to `sparseWatch` seconds more. Loading
+    /// screens read 2–9 lines; an app's real screens rarely have so few.
+    private static let sparseLines = 10
+    private static let sparseWatch = 3.0
+
+    /// Most of the listed lines look different in `image`: a new screen, even when the change finished
+    /// before the first frame of the wait (an app's splash screen).
+    private func looksNew(_ image: CGImage) -> Bool {
+        guard state.width == image.width, state.height == image.height else { return true }
+        let checked = state.entries.compactMap { entry -> Bool? in
+            guard let saved = entry.pixels.flatMap({ Data(base64Encoded: $0) }) else { return nil }
+            return ScreenCapture.sameArea([UInt8](saved), image, in: UIState.checkArea(entry.frame))
+        }
+        guard checked.count >= 3 else { return true }
+        return checked.filter { !$0 }.count * 2 > checked.count
+    }
 
     /// How long after the input a video player's controls are reliably up: they fade in about 0.8 s after
     /// a tap and hide again about 3 s later.
@@ -497,7 +545,7 @@ final class UIScreen {
     /// appear late and hide on their own, so by the time a playing video counts as settled they were
     /// usually gone, and the list never showed them (PITFALLS #49).
     func observeAfterAction() throws -> Report {
-        let settle = try settleKeepingEarly()
+        var settle = try settleKeepingEarly()
         readEarly = false
         if settle.moving != nil || !settle.stable,
             let early = settle.early.first(where: { $0.at + Self.reactionDelay >= Self.controlsUp }),
@@ -506,7 +554,22 @@ final class UIScreen {
             readEarly = true
             return try observe(early.image)
         }
-        return try observe(settle.image)
+        var read = try Self.read(settle.image, scale: pointScale(for: settle.image))
+        // A splash screen held still for two seconds before the app's first screen came (PITFALLS #69).
+        // Waiting that long after every new screen would slow every step, so only a new screen with few
+        // lines is watched for longer, and settled again on any change.
+        if settle.transition, read.lines.count < Self.sparseLines {
+            let deadline = Date().addingTimeInterval(Self.sparseWatch)
+            while Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.3)
+                guard try !ScreenCapture.unchanged(settle.image, try ScreenCapture.image(rsd: rsd), ignoring: settle.moving)
+                else { continue }
+                guard try settleAgain(&settle) else { break }
+                read = try Self.read(settle.image, scale: pointScale(for: settle.image))
+                if read.lines.count >= Self.sparseLines { break }
+            }
+        }
+        return try observe(settle.image, read: read)
     }
 
     /// Pixels per point of the panel `image` came from, which `ScreenElements` sizes controls by. Kept with
@@ -531,8 +594,10 @@ final class UIScreen {
     }
 
     /// Reads `image`, matches it against the stored list, stores the result and saves the screenshot.
-    func observe(_ image: CGImage) throws -> Report {
-        var (lines, keyboard, popup) = try Self.read(image, scale: pointScale(for: image))
+    func observe(
+        _ image: CGImage, read: (lines: [TextRecognizer.Line], keyboard: Bool, popup: [CGRect]?)? = nil
+    ) throws -> Report {
+        var (lines, keyboard, popup) = try read ?? Self.read(image, scale: pointScale(for: image))
         try saveImage(image)
         let old = state
         // An icon named by `ui --icons` keeps its name while it stays put and looks the same, so the next read doesn't report

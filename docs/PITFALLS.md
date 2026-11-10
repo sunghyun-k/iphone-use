@@ -30,7 +30,7 @@ already broken once.
 | CoreDevice services and features (finding them, envelopes, get/set) | #12, #14, #21, #22 |
 | DTX (Instruments, used to revive a stuck launch daemon) | #5, #6, #7, #20 |
 | Apps and URLs | #20, #21, #29, #65 (a name with a dot) |
-| Screenshots and waiting for the screen to settle | #13, #25, #34, #49 |
+| Screenshots and waiting for the screen to settle | #13, #25, #34, #49, #69 |
 | Touch coordinates, panels and the grid | #8, #9, #10, #23, #51, #53 |
 | HID delivery and timing (lost taps and keys) | #15, #16, #17, #18, #50, #54 |
 | Scrolling and swipes | #24, #31, #33 |
@@ -1180,3 +1180,33 @@ there:
 Checked afterwards on that device: "Where is the nearest subway station?" in the translator,
 "abcde", "Wi-Fi 설정" and "Bluetooth" in Settings' search, and "대한민국 Seoul 지하철" in an
 encyclopedia app's search, all typed as given.
+
+### 69. A new screen holds still while it loads
+
+Settling means two frames in a row look the same. A loading screen often does: an app's splash, an
+article's blank page, a search's first results. An agent driving third-party apps got lists of 2–9
+lines after `launch`, `press` and `type --enter`, and had to run `ui` again a second or two later.
+Measured over USB (a capture takes 0.3–0.7 s):
+
+- A delivery app's splash came about 1.7 s after `launch --restart`, held still for about 1.7 s,
+  then the home screen replaced it and kept changing until about 6 s.
+- An encyclopedia article went from the results (45 lines) through a blank page (6 lines) to the
+  article (30 lines), then changed again a second later.
+- Settings' About page settled, then changed about 1% of the screen a second later as values filled
+  in. Settling again for that cost two seconds and read the same lines.
+
+What `UIScreen` does now, only for a new screen (most of the screen changed during the wait
+(`Settle.transition`), or most listed lines look different (`looksNew`), which also catches a change
+that finished before the first frame):
+
+- It looks once more, 0.2 s after settling. If 2.5% or more of the screen changed, it settles again
+  and looks again (up to three times). Smaller changes are left alone.
+- If the list then has fewer than 10 lines, it keeps watching for up to 3 s and settles again on any
+  change. The line count comes from the read the list needs anyway, so a full screen pays no second
+  OCR.
+- After settling again, the early frames are dropped. They show the loading screen, and the
+  moving-video rule (#49) read one of them for a home screen with a moving banner, so the list showed
+  the splash.
+
+Cost: a navigation in Settings went from about 3.8 s to about 4.9 s with the daemon (one more
+capture). `launch --restart` of that delivery app takes about 8.5 s, but returns its home screen.

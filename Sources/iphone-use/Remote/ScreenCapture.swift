@@ -117,6 +117,9 @@ enum ScreenCapture {
         let stable: Bool
         /// Pixel rect of the area that kept changing after settling (video background, spinner, etc.). nil if none.
         let moving: CGRect?
+        /// Most of the screen changed between two frames on the way: a new screen came in. Such a screen
+        /// is often still loading when it first holds still (`UIScreen.settleKeepingEarly`, PITFALLS #69).
+        var transition = false
     }
 
     /// Repeats captures until the screen settles. Returns that screen, or the last one if it never settles in time.
@@ -134,6 +137,7 @@ enum ScreenCapture {
         var previous: [UInt8]?
         var recent: [[Bool]] = []
         var early: [(at: TimeInterval, image: CGImage)] = []
+        var transition = false
         // One panel lookup per wait, not per frame: a fold mid-wait changes everything anyway.
         let screen = try ScreenSize.query(rsd: rsd)
         while true {
@@ -142,8 +146,10 @@ enum ScreenCapture {
             let current = try signature(of: image)
             if let previous {
                 let diff = changedCells(previous, current)
-                if diff.filter({ $0 }).count <= diff.count / 400 {
-                    return Settle(image: image, early: early, stable: true, moving: nil)
+                let count = diff.filter({ $0 }).count
+                if count * 3 >= diff.count { transition = true }
+                if count <= diff.count / 400 {
+                    return Settle(image: image, early: early, stable: true, moving: nil, transition: transition)
                 }
                 recent = Array((recent + [diff]).suffix(3))
                 if recent.count == 3,
@@ -152,10 +158,13 @@ enum ScreenCapture {
                     }),
                     box.width * box.height * 3 <= CGFloat(signatureWidth * signatureHeight)
                 {
-                    return Settle(image: image, early: early, stable: true, moving: pixelRect(box, in: image))
+                    return Settle(
+                        image: image, early: early, stable: true, moving: pixelRect(box, in: image), transition: transition)
                 }
             }
-            if Date() >= deadline { return Settle(image: image, early: early, stable: false, moving: nil) }
+            if Date() >= deadline {
+                return Settle(image: image, early: early, stable: false, moving: nil, transition: transition)
+            }
             previous = current
         }
     }
@@ -170,6 +179,14 @@ enum ScreenCapture {
     static func unchanged(
         _ before: CGImage, _ after: CGImage, ignoring: CGRect?, within: CGRect? = nil
     ) throws -> Bool {
+        try changedShare(before, after, ignoring: ignoring, within: within).cells <= 2
+    }
+
+    /// How many coarse cells differ between two frames, below the status bar and outside `ignoring`
+    /// (and inside `within`, if given), and what share of all cells that is.
+    static func changedShare(
+        _ before: CGImage, _ after: CGImage, ignoring: CGRect?, within: CGRect? = nil
+    ) throws -> (cells: Int, share: Double) {
         let diff = changedCells(try signature(of: before), try signature(of: after))
         let statusBar = CGFloat(after.height * 6 / 100)
         let cellWidth = CGFloat(after.width) / CGFloat(signatureWidth)
@@ -182,7 +199,7 @@ enum ScreenCapture {
             if let within, !within.contains(point) { return false }
             return !(ignoring?.contains(point) ?? false)
         }.count
-        return count <= 2
+        return (count, Double(count) / Double(diff.count))
     }
 
     /// Does `rect` (pixels) look the same in both frames? Compared at 1/8 size in grayscale; up to 4% of
