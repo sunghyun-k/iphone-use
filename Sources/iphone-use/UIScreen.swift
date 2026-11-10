@@ -39,6 +39,8 @@ struct UIState: Codable {
     var height = 0
     var entries: [Entry] = []
     var keyboard = false
+    /// A popup over a dimmed screen (`ScreenState.popup`): the card, then pieces beside it. Pixels.
+    var popup: [[Double]]?
     var nextRef = 1
     /// Pixels per point for screens of `scaleSize` (`[width, height]`), so it's asked once, not per read.
     var scale: Int?
@@ -82,7 +84,7 @@ struct UIState: Codable {
 enum UIError: Error, CustomStringConvertible {
     case noList
     case unknownRef(Int, last: Int)
-    case badRef(String)
+    case badRef(String, matches: [String])
     case stale(String)
     case noKeyboard
     case rowNotSwipeable(String)
@@ -93,8 +95,9 @@ enum UIError: Error, CustomStringConvertible {
             return "No text list. Run ui first."
         case .unknownRef(let ref, let last):
             return "@t\(ref) is not in the list (last ref is @t\(last)). Run ui to get a fresh list."
-        case .badRef(let text):
-            return "\(text) is not a ref. Pass a ref from the ui list, like @t12."
+        case .badRef(let text, let matches):
+            if matches.isEmpty { return "\(text) is not a ref. Pass a ref from the ui list, like @t12." }
+            return "\(text) is not a ref. In the last list: \(matches.joined(separator: ", ")). Pass the ref of the one you mean."
         case .stale(let text):
             return """
                 "\(text)" is no longer where the list saw it, and it isn't anywhere else on the screen once — the \
@@ -104,7 +107,8 @@ enum UIError: Error, CustomStringConvertible {
             return """
                 The on-screen keyboard did not appear — this doesn't look like a text field. Did not type (typing \
                 without focus sends keys to app shortcuts). Look at the screenshot, pick the field (its placeholder \
-                text, or touch --cell for an empty one) and call type again.
+                text, or touch --cell for an empty one) and call type again. If it is a password field, its \
+                keyboard never shows in screenshots: call type again with --secure.
                 """
         case .rowNotSwipeable(let text):
             return """
@@ -144,12 +148,45 @@ final class UIScreen {
 
     /// The text lines of a screenshot in reading order, without the status bar and the keyboard keys, with
     /// the controls that have no text (`[toggle on] Wi-Fi`, `[chevron left]`) in among them.
-    static func read(_ image: CGImage, scale: Int) throws -> (lines: [TextRecognizer.Line], keyboard: Bool) {
+    static func read(_ image: CGImage, scale: Int) throws -> (lines: [TextRecognizer.Line], keyboard: Bool, popup: [CGRect]?) {
         let height = CGFloat(image.height)
         var lines = try TextRecognizer.lines(in: image)
         // Found against all the text, so glyphs OCR already read (status items included) aren't repeated.
-        var (controls, buttons) = ScreenElements.find(in: image, text: lines, scale: scale)
+        var (controls, buttons, tiles) = ScreenElements.find(in: image, text: lines, scale: scale)
         for (index, button) in buttons { lines[index].button = button }
+        for (index, name) in ScreenElements.symbolNames(for: lines, in: image, scale: scale) {
+            lines[index] = TextRecognizer.Line(text: name, frame: lines[index].frame, button: lines[index].button)
+        }
+        // A ticked box's own mark, read by OCR as "v" or "✓": the box's line says it (PITFALLS #66).
+        let ticked = controls.filter { $0.text.hasPrefix("[checkbox ") }.map { $0.frame.insetBy(dx: -4 * CGFloat(scale), dy: -4 * CGFloat(scale)) }
+        lines.removeAll { line in
+            (TextRecognizer.checkMarks.contains(line.text) || line.text == "[checkmark]")
+                && ticked.contains { $0.contains(CGPoint(x: line.frame.midX, y: line.frame.midY)) }
+        }
+        // A mark the matcher didn't name (a web page's ticked box) goes back in front of its row's text.
+        for index in lines.indices.dropLast().reversed() {
+            let mark = lines[index], rest = lines[index + 1]
+            guard TextRecognizer.checkMarks.contains(mark.text), mark.button == nil,
+                abs(rest.frame.midY - mark.frame.midY) < mark.frame.height / 2,
+                rest.frame.minX >= mark.frame.maxX, rest.frame.minX < mark.frame.maxX + mark.frame.height * 2
+            else { continue }
+            lines[index] = TextRecognizer.Line(
+                // "√" is written as the mark it is. "~" stays: it's as often a leading icon (an airplane before
+                // a city's name) as a ticked box, and "✓ Seoul" would claim a selection (PITFALLS #65).
+                text: (mark.text == "√" ? "✓" : mark.text) + " " + rest.text,
+                frame: mark.frame.union(rest.frame), button: rest.button)
+            lines.remove(at: index + 1)
+        }
+        // A captioned button whose glyph OCR read as a character or two (a swipe action's trash can as
+        // "타") is that button, not text: named by its caption like the ones OCR left unread, or the
+        // caption would be the only line with a meaning, and tapping it does nothing (PITFALLS #64).
+        for (index, line) in lines.enumerated() {
+            guard let button = line.button, line.text.count <= 2, !line.text.contains(where: \.isNumber),
+                let caption = ScreenElements.caption(under: button, in: lines, px: CGFloat(scale))
+            else { continue }
+            lines[index] = TextRecognizer.Line(text: "[button] " + caption.text, frame: button)
+        }
+        lines = withoutTileGlyphs(lines, tiles: tiles, scale: CGFloat(scale))
         // "Keys are left out" is said only when they were: the looser `keyboardVisible` also fires on a
         // keypad (the Phone app's, the Calculator's), whose keys stay in the list.
         let keysTop = TextRecognizer.keysTop(in: lines, height: height)
@@ -157,22 +194,156 @@ final class UIScreen {
         if let keys = keysTop {
             lines.removeAll { $0.frame.midY > keys - height * 0.005 }
             controls.removeAll { $0.frame.midY > keys - height * 0.005 }
+            // The suggestion bar right above the keys: two or three short words at the thirds of the
+            // width. They came and went with every key typed (PITFALLS #65). A lone line there stays: a
+            // chat's input field sits in the same place when there is no bar.
+            let width = CGFloat(image.width), band = 56 * CGFloat(scale)
+            let third = { (line: TextRecognizer.Line) -> Bool in
+                line.frame.midY > keys - band && line.text.count <= 12
+                    && [1.0 / 6, 0.5, 5.0 / 6].contains { abs(line.frame.midX / width - $0) < 0.07 }
+            }
+            if lines.filter(third).count >= 2 {
+                lines.removeAll(where: third)
+                controls.removeAll { $0.frame.midY > keys - band }
+            }
         }
         // Status glyphs (battery, signal, focus moon) sit around the clock, or in the strip along the top.
         let clocks = statusClocks(lines, height: height)
+        // Only on the clock's own row: four clock-heights reached the Calculator's history button below the
+        // clock, which went missing whenever the device's clock matched this Mac's (PITFALLS #63).
         controls.removeAll { control in
-            control.frame.midY < height * 0.032 || clocks.contains { near(control.frame, $0) }
+            control.frame.midY < height * 0.032 || clocks.contains {
+                near(control.frame, $0) && abs(control.frame.midY - $0.midY) < $0.height * 1.5
+            }
         }
-        lines = withoutStatusItems(lines, height: height) + controls
+        // What OCR made of a ticked box's mark ("v", "✓") or of a pager's dots ("•••") is in the control's
+        // own line already.
+        let marks = controls.filter { $0.text.hasPrefix("[checkbox ") || $0.text.hasPrefix("[page dots]") }.map(\.frame)
+        lines.removeAll { line in
+            oneLine(line.text).count <= 2 || line.text.hasPrefix("[") || line.text.allSatisfy({ "•·.●∙ ".contains($0) })
+                ? marks.contains { $0.insetBy(dx: -4 * CGFloat(scale), dy: -4 * CGFloat(scale)).contains(CGPoint(x: line.frame.midX, y: line.frame.midY)) }
+                : false
+        }
+        lines = withoutStatusItems(lines, height: height) + pageDotsMerged(controls, scale: CGFloat(scale))
+        // A caption that named its button is in that line already. Listed too, it was the line to press
+        // by its look, and pressing it does nothing.
+        let captioned = lines.filter { $0.text.hasPrefix("[button] ") || $0.text.hasPrefix("[circle button] ") }
+        lines.removeAll { line in
+            captioned.contains { button in
+                button.text.hasSuffix("] " + line.text)
+                    && ScreenElements.caption(under: button.frame, in: [line], px: CGFloat(scale)) != nil
+            }
+        }
+        // Rows that are icon bars: two or more bracketed controls and no text of more than a character.
+        let iconRows = lines.filter { $0.text.hasPrefix("[") }.map(\.frame)
+        let wordRows = lines.filter { !$0.text.hasPrefix("[") && oneLine($0.text).count > 1 }.map(\.frame)
+        func inIconBar(_ frame: CGRect) -> Bool {
+            let sameRow = { (other: CGRect) in abs(other.midY - frame.midY) < frame.height / 2 }
+            return iconRows.filter(sameRow).count >= 2 && !wordRows.contains(where: sameRow)
+        }
         lines = lines.compactMap { line in
             var text = oneLine(line.text)
             // A lone chevron OCR read as "<" is the same control the shape matcher calls [chevron left];
             // one name for it, so an agent looking for the back button finds it either way.
             if ["<", "‹"].contains(text) { text = "[chevron left]" }
             if [">", "›"].contains(text) { text = "[chevron right]" }
+            // Punctuation as tall as an icon is an icon OCR took a guess at: a tab bar's icon came out as
+            // ":" in one read, "⅛" in the next and [icon] in a third, a changed line in every report.
+            // A password's dots come out as a different mix of "•" and "." each read.
+            if text.count >= 3, text.allSatisfy({ "•·.●∙".contains($0) }), text.contains(where: { $0 != "." }) {
+                text = String(repeating: "•", count: text.count)
+            }
+            if text.count <= 2, line.frame.height >= 18 * CGFloat(scale),
+                text.allSatisfy({ ":;'\"`°|·^=".contains($0) || ($0.isNumber && !$0.isASCII) })
+            {
+                text = "[icon]"
+            }
+            // A lone letter among icons is an icon OCR took for a letter: a tab bar without captions listed
+            // its house as "A" and a reload arrow as "C" (PITFALLS #65). Digits stay: a keypad's key that
+            // has no button shape sits among `[circle button]`s too.
+            if text.count == 1, line.button == nil, text.first!.isLetter, text.first!.isASCII, inIconBar(line.frame) {
+                text = "[icon]"
+            }
             return text.isEmpty ? nil : TextRecognizer.Line(text: text, frame: line.frame, button: line.button)
         }
-        return (readingOrder(lines), keyboard)
+        // A popup's close button often floats beside the card on a translucent disc, over whatever is
+        // behind: no flat color around it, so no shape was found (PITFALLS #66). It's one of the few
+        // things the dimming layer doesn't cover, and that is how it's found.
+        let bitmap = PointBitmap(image, scale: scale)
+        if let bitmap {
+            for index in ScreenState.selected(lines, in: bitmap) {
+                lines[index] = TextRecognizer.Line(text: "[selected] " + lines[index].text, frame: lines[index].frame, button: lines[index].button)
+            }
+            let px = CGFloat(scale)
+            let textInPoints = lines.filter { !$0.text.hasPrefix("[") }.map {
+                CGRect(x: $0.frame.minX / px, y: $0.frame.minY / px, width: $0.frame.width / px, height: $0.frame.height / px)
+            }
+            for slider in ScreenState.sliders(in: bitmap, text: textInPoints) {
+                // Whatever was made of the knob (an [icon], a [toggle]) is this.
+                lines.removeAll { $0.text.hasPrefix("[") && slider.knob.insetBy(dx: -4 * px, dy: 0).contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY)) }
+                lines.append(TextRecognizer.Line(text: "[slider \(Int((slider.value * 100).rounded()))%]", frame: slider.knob))
+            }
+        }
+        let popup = bitmap.flatMap(ScreenState.popup)
+        for piece in popup?.dropFirst() ?? [] where !lines.contains(where: { $0.frame.intersects(piece) || ($0.button?.intersects(piece) ?? false) }) {
+            lines.append(TextRecognizer.Line(text: "[circle button]", frame: piece))
+        }
+        return (readingOrder(lines), keyboard, popup)
+    }
+
+    /// A pager's dots as one line, `[page dots] 13`: a carousel of thirteen pictures listed thirteen
+    /// `[icon]` lines, and each read found a different number of them (PITFALLS #65). Dots are small
+    /// unnamed icons of one size in a row, evenly spaced.
+    static func pageDotsMerged(_ controls: [TextRecognizer.Line], scale: CGFloat) -> [TextRecognizer.Line] {
+        let dots = controls.indices.filter {
+            controls[$0].text == "[icon]" && controls[$0].frame.width <= 12 * scale && controls[$0].frame.height <= 12 * scale
+        }.sorted { controls[$0].frame.midX < controls[$1].frame.midX }
+        var merged: [TextRecognizer.Line] = [], used = Set<Int>()
+        for start in dots where !used.contains(start) {
+            var run = [start]
+            var pitch: CGFloat?
+            for next in dots where !used.contains(next) && controls[next].frame.midX > controls[run.last!].frame.midX {
+                let last = controls[run.last!].frame, frame = controls[next].frame
+                guard abs(frame.midY - last.midY) < 2 * scale else { continue }
+                let gap = frame.midX - last.midX
+                guard gap <= 30 * scale, pitch.map({ abs(gap - $0) < $0 * 0.25 }) ?? true else { continue }
+                pitch = pitch ?? gap
+                run.append(next)
+            }
+            guard run.count >= 3 else { continue }
+            used.formUnion(run)
+            let frame = run.dropFirst().reduce(controls[run[0]].frame) { $0.union(controls[$1].frame) }
+            merged.append(TextRecognizer.Line(text: "[page dots] \(run.count)", frame: frame))
+        }
+        return controls.indices.filter { !used.contains($0) }.map { controls[$0] } + merged
+    }
+
+    /// Drops what OCR read off the glyph of a row's leading icon (a Settings row's colored square): a
+    /// few characters inside the tile, with the row's label right after it. "*" for Bluetooth or "이"
+    /// for Wi-Fi said nothing, and pressing the label does the same (PITFALLS #62).
+    static func withoutTileGlyphs(_ lines: [TextRecognizer.Line], tiles: [CGRect], scale: CGFloat) -> [TextRecognizer.Line] {
+        lines.compactMap { line in
+            let text = line.text.trimmingCharacters(in: .whitespaces)
+            let start = CGPoint(x: line.frame.minX + line.frame.height * 0.3, y: line.frame.midY)
+            let mid = CGPoint(x: line.frame.midX, y: line.frame.midY)
+            if text.count <= 4, let tile = tiles.first(where: { $0.insetBy(dx: -scale, dy: -scale).contains(mid) }) {
+                let labelled = lines.contains { other in
+                    other.frame.minX > tile.maxX && other.frame.minX - tile.maxX < 24 * scale
+                        && abs(other.frame.midY - tile.midY) < tile.height * 0.7
+                }
+                return labelled ? nil : line
+            }
+            // The glyph read together with the label ("8 제어 센터"): the first word starts inside a tile and
+            // the rest runs past it.
+            guard let tile = tiles.first(where: { $0.contains(start) }), line.frame.maxX > tile.maxX + 24 * scale,
+                let space = text.firstIndex(of: " "), text.distance(from: text.startIndex, to: space) <= 2
+            else { return line }
+            let rest = String(text[text.index(after: space)...]).trimmingCharacters(in: .whitespaces)
+            let cut = min(line.frame.maxX - 1, tile.maxX)
+            return TextRecognizer.Line(
+                text: rest, frame: CGRect(x: cut, y: line.frame.minY, width: line.frame.maxX - cut, height: line.frame.height),
+                button: line.button)
+        }
     }
 
     /// Drops the status items: the clock, battery level, carrier and signal glyphs OCR reads as text.
@@ -187,6 +358,18 @@ final class UIScreen {
         let clocks = statusClocks(lines, height: height)
         return lines.compactMap { line in
             if clocks.contains(line.frame) { return backBreadcrumb(in: line) }
+            if let clock = clocks.first {
+                // On the clock's own row a short line is a status glyph: the Wi-Fi fan and the battery came
+                // out as "이4" in one read and "..이" in the next (PITFALLS #65).
+                if line.text.count <= 4, abs(line.frame.midY - clock.midY) < clock.height * 0.6 { return nil }
+                // Right under an iPhone's clock is the way back to the app that opened this one. Its arrow
+                // read as "A", "•" or "<" from one read to the next, a changed line in every report.
+                if line.frame.midY > clock.midY, line.frame.midY < height * 0.05, line.frame.minX < clock.maxX,
+                    let space = line.text.firstIndex(of: " "), line.text.distance(from: line.text.startIndex, to: space) == 1
+                {
+                    return TextRecognizer.Line(text: "◀" + line.text[space...], frame: line.frame, button: line.button)
+                }
+            }
             guard statusLike(line.text) else { return line }
             if line.frame.midY < height * 0.05 { return nil }
             return clocks.contains { near(line.frame, $0) } ? nil : line
@@ -216,8 +399,23 @@ final class UIScreen {
             if line.frame.midY < height * 0.3 && showsClock(line.text) { return true }
             // An iPad puts the date next to the clock and OCR reads both as one line ("9:41 Mon Jun 9").
             // Only at the very top: lower down, a line holding the current time is content (an alarm). PITFALLS #56.
-            return line.frame.midY < height * 0.05 && line.text.count <= 30
-                && line.text.split(separator: " ").contains { showsClock(String($0)) }
+            if line.frame.midY < height * 0.05 && line.text.count <= 30
+                && line.text.split(separator: " ").contains(where: { showsClock(String($0)) })
+            {
+                return true
+            }
+            // Any time at all in the top strip, starting a short line: the device's time zone can differ from
+            // this Mac's. Pinning the location to Cupertino moved the device's clock to Pacific time, and
+            // "5:21" with the focus moon read as "C" stayed in the list (PITFALLS #63).
+            guard line.frame.midY < height * 0.03, line.text.count <= 12,
+                let first = line.text.split(separator: " ").first
+            else { return false }
+            // The focus moon often sticks to the minutes ("3:51L").
+            let parts = first.split(separator: ":")
+            guard parts.count == 2, (1...2).contains(parts[0].count), parts[1].count >= 2,
+                !parts[1].dropFirst(2).contains(where: \.isNumber)
+            else { return false }
+            return Int(parts[0]).map { $0 <= 23 } == true && Int(parts[1].prefix(2)).map { $0 <= 59 } == true
         }.map(\.frame)
     }
 
@@ -230,9 +428,11 @@ final class UIScreen {
     /// "9:41" matching this Mac's time within a minute, in 12- or 24-hour form.
     private static func showsClock(_ text: String) -> Bool {
         let parts = text.trimmingCharacters(in: .whitespaces).split(separator: ":")
-        guard parts.count == 2, parts[1].count == 2, let hour = Int(parts[0]), let minute = Int(parts[1]) else {
-            return false
-        }
+        // The location arrow next to the clock is read into it as a stray character ("11:30①").
+        guard parts.count == 2, (2...4).contains(parts[1].count),
+            parts[1].dropFirst(2).allSatisfy({ !($0.isNumber && $0.isASCII) }),
+            let hour = Int(parts[0]), let minute = Int(parts[1].prefix(2))
+        else { return false }
         let calendar = Calendar.current
         return [-60.0, 0, 60].contains { offset in
             let now = calendar.dateComponents([.hour, .minute], from: Date().addingTimeInterval(offset))
@@ -247,6 +447,8 @@ final class UIScreen {
         // The VPN badge; its bracket glyph comes out as "{}" or "()" (PITFALLS #56).
         // With the Wi-Fi glyph and battery level beside it, OCR may read them as one line ("{} VPN ⑦ 80)").
         if text.filter({ $0.isLetter }).uppercased() == "VPN" && text.count <= 16 { return true }
+        // The signal bars read as dots, often with the Wi-Fi glyph after them as a letter ("•••• 이", "....옛").
+        if text.count <= 8, text.prefix(while: { ".•·∙".contains($0) }).count >= 3 { return true }
         guard !text.isEmpty, text.count <= 5 else { return false }
         if ["5G", "5G+", "5GE", "5G UC", "LTE", "4G", "3G", "SOS"].contains(text.uppercased()) { return true }
         return text.allSatisfy { $0.isNumber || ":;.,%+ ".contains($0) }
@@ -330,7 +532,7 @@ final class UIScreen {
 
     /// Reads `image`, matches it against the stored list, stores the result and saves the screenshot.
     func observe(_ image: CGImage) throws -> Report {
-        var (lines, keyboard) = try Self.read(image, scale: pointScale(for: image))
+        var (lines, keyboard, popup) = try Self.read(image, scale: pointScale(for: image))
         try saveImage(image)
         let old = state
         // An icon named by `ui --icons` keeps its name while it stays put and looks the same, so the next read doesn't report
@@ -352,6 +554,7 @@ final class UIScreen {
         state.width = image.width
         state.height = image.height
         state.keyboard = keyboard
+        state.popup = popup.map { $0.map { [Double($0.minX), Double($0.minY), Double($0.width), Double($0.height)] } }
 
         guard sameSize, !old.entries.isEmpty else { return reset(lines, image) }
 
@@ -359,15 +562,31 @@ final class UIScreen {
         var refs = [Int?](repeating: nil, count: lines.count)
         var used = Set<Int>()
         var moved: [(ref: Int, was: CGRect)] = []
-        // Same text near the same place, then same text anywhere (the list moved).
-        for pass in 0..<2 {
+        // Same text near the same place, nearest pairs first: in line order, a line could take the entry
+        // that belonged to its neighbor, and a generic name ([circle button]) hopped between keys.
+        var pairs: [(line: Int, entry: Int, distance: Double)] = []
+        for (index, line) in lines.enumerated() {
+            for (offset, entry) in old.entries.enumerated() where Self.sameText(entry.text, line.text) {
+                let d = distance(entry.frame, line.frame)
+                if d < height * 0.03 { pairs.append((index, offset, d)) }
+            }
+        }
+        for pair in pairs.sorted(by: { $0.distance < $1.distance }) where refs[pair.line] == nil && !used.contains(pair.entry) {
+            refs[pair.line] = old.entries[pair.entry].ref
+            used.insert(pair.entry)
+        }
+        // Then same text farther away, only along with the rest of the list (it scrolled): the shift is the
+        // median of the lines whose text appears once, before and after. Matching same text anywhere
+        // gave the Calculator's 7 key's ref to the 7 that appeared in its display (PITFALLS #62).
+        if let shift = listShift(lines: lines, refs: refs, old: old.entries, used: used) {
             for (index, line) in lines.enumerated() where refs[index] == nil {
-                let candidates = old.entries.enumerated().filter { !used.contains($0.offset) && $0.element.text == line.text }
-                let near = candidates.min { distance($0.element.frame, line.frame) < distance($1.element.frame, line.frame) }
-                guard let near, pass == 1 || distance(near.element.frame, line.frame) < height * 0.03 else { continue }
+                let expected = line.frame.offsetBy(dx: -shift.dx, dy: -shift.dy)
+                let near = old.entries.enumerated().filter { !used.contains($0.offset) && Self.sameText($0.element.text, line.text) }
+                    .min { distance($0.element.frame, expected) < distance($1.element.frame, expected) }
+                guard let near, distance(near.element.frame, expected) < height * 0.03 else { continue }
                 refs[index] = near.element.ref
                 used.insert(near.offset)
-                if pass == 1 { moved.append((near.element.ref, near.element.frame)) }
+                moved.append((near.element.ref, near.element.frame))
             }
         }
         var unchanged = refs.compactMap { $0 }.count
@@ -408,10 +627,44 @@ final class UIScreen {
         return .sameScreen(changed: changed, added: added, removed: removed, moved: moved, unchanged: unchanged)
     }
 
+    /// How far the unmatched lines moved together, from those whose text is distinctive (three or more
+    /// characters, not a bracketed control) and appears once among the unmatched lines on both sides.
+    /// Nil with fewer than two of them: one line moving alone says nothing about the rest.
+    private func listShift(lines: [TextRecognizer.Line], refs: [Int?], old: [UIState.Entry], used: Set<Int>)
+        -> (dx: Double, dy: Double)?
+    {
+        let open = lines.indices.filter { refs[$0] == nil }.map { lines[$0] }
+        let left = old.indices.filter { !used.contains($0) }.map { old[$0] }
+        var dx: [Double] = [], dy: [Double] = []
+        for line in open where line.text.count >= 3 && !line.text.hasPrefix("[") {
+            guard open.filter({ Self.sameText($0.text, line.text) }).count == 1 else { continue }
+            let same = left.filter { Self.sameText($0.text, line.text) }
+            guard same.count == 1, let entry = same.first else { continue }
+            dx.append(line.frame.midX - entry.frame.midX)
+            dy.append(line.frame.midY - entry.frame.midY)
+        }
+        guard dx.count >= 2 else { return nil }
+        return (dx.sorted()[dx.count / 2], dy.sorted()[dy.count / 2])
+    }
+
     private func reset(_ lines: [TextRecognizer.Line], _ image: CGImage) -> Report {
         state.entries = lines.enumerated().map { UIState.Entry(ref: $0.offset + 1, line: $0.element, image: image) }
         state.nextRef = lines.count + 1
         return .newScreen
+    }
+
+    /// The same line read twice. Case aside: OCR flips it between reads ("Row 2" then "ROW 2" for the
+    /// same pixels' neighbor), and each flip showed as one line removed and another added, or made
+    /// `press` say the line was gone (PITFALLS #64).
+    /// So is one letter inside a word of a longer line ("subtitle of" then "subtitle ot"). A digit, or a
+    /// letter standing alone ("Plan A" to "Plan B"), is a real change.
+    static func sameText(_ a: String, _ b: String) -> Bool {
+        if a == b || a.caseInsensitiveCompare(b) == .orderedSame { return true }
+        let x = Array(a.lowercased()), y = Array(b.lowercased())
+        guard x.count == y.count, x.count >= 8 else { return false }
+        let differing = x.indices.filter { x[$0] != y[$0] }
+        guard differing.count == 1, let at = differing.first, x[at].isLetter, y[at].isLetter else { return false }
+        return (at > 0 && x[at - 1].isLetter) || (at + 1 < x.count && x[at + 1].isLetter)
     }
 
     private func distance(_ a: CGRect, _ b: CGRect) -> Double {
@@ -482,7 +735,7 @@ final class UIScreen {
         }
         // A named icon is plain [icon] to a fresh read.
         let wanted = entry.text.hasPrefix("[icon: ") ? "[icon]" : entry.text
-        let matches = try Self.read(image, scale: pointScale(for: image)).lines.filter { $0.text == wanted }
+        let matches = try Self.read(image, scale: pointScale(for: image)).lines.filter { Self.sameText($0.text, wanted) }
         guard matches.count == 1, let line = matches.first else { throw UIError.stale(entry.text) }
         return (line.frame, true)
     }
@@ -514,13 +767,22 @@ final class UIScreen {
     func printList(_ entries: [UIState.Entry]) {
         if state.entries.isEmpty { print("(no text on this screen — look at the screenshot)") }
         for entry in entries { print(line(entry)) }
-        if state.keyboard { print("(the on-screen keyboard is up; its keys are left out)") }
+        printNotes()
         print(imageNote)
+    }
+
+    /// What holds for the whole screen: the keyboard, a popup.
+    func printNotes() {
+        if state.keyboard { print("(the on-screen keyboard is up; its keys are left out)") }
+        guard let rects = state.popup?.map({ CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) }), let card = rects.first else { return }
+        let on = state.entries.filter { entry in rects.contains { $0.contains(CGPoint(x: entry.frame.midX, y: entry.frame.midY)) } }
+        let refs = on.map { "@t\($0.ref)" }.joined(separator: " ")
+        print("(a popup is up around \(cell(card)), over a dimmed screen. On it: \(refs.isEmpty ? "no listed line" : refs). The other lines are behind it and won't react until it's closed; if no line closes it, find its ✕ on the screenshot and tap that cell)")
     }
 
     func printReport(_ report: Report) {
         if readEarly {
-            print("(part of the screen keeps moving, like a video: read 1.2 s after the input, while self-hiding controls are up. They may be gone by your next command: if press says the line moved, tap the video to bring them back and press within a second or two, chaining with --no-ui)")
+            print("(part of the screen keeps moving, like a video or a running timer: read 1.2 s after the input, while a video's self-hiding controls are up. Over a video they may be gone by your next command: if press says the line moved, tap the video to bring them back and press within a second or two, chaining with --no-ui. A running timer's digits change on every read; that's expected)")
         }
         switch report {
         case .newScreen:
@@ -529,6 +791,7 @@ final class UIScreen {
         case .sameScreen(let changed, let added, let removed, let moved, let unchanged):
             if changed.isEmpty, added.isEmpty, removed.isEmpty, moved.isEmpty {
                 print("Same screen — no line changed (\(unchanged) unchanged). Check the screenshot: something without a line (an image, a color) may have changed; if nothing reacted, pick a different target.")
+                printNotes()
                 print(imageNote)
                 return
             }
@@ -546,7 +809,7 @@ final class UIScreen {
                     print("moved\t\(line(entry))\t(was: \(cell(item.was)))")
                 }
             }
-            if state.keyboard { print("(the on-screen keyboard is up; its keys are left out)") }
+            printNotes()
             print(imageNote)
         }
     }

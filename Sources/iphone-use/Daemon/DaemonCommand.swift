@@ -162,6 +162,9 @@ struct DaemonCommand: ParsableCommand {
     /// and deadlocks.
     nonisolated(unsafe) private static var socketToUnlink: String?
 
+    /// Commands safe to run twice: they read the device and send no input.
+    static let readOnly: Set<String> = ["ui", "wait", "screenshot", "apps", "devices", "clipboard", "hid-info"]
+
     static func execute(_ args: [String]) -> DaemonResponse {
         let directory = FileManager.default.temporaryDirectory
         let outURL = directory.appendingPathComponent("iphone-use-\(UUID().uuidString).out")
@@ -179,17 +182,31 @@ struct DaemonCommand: ParsableCommand {
         dup2(errFD, 2)
 
         var exitCode: Int32 = 0
-        do {
-            var command = try IPhoneUse.parseAsRoot(args)
-            try command.run()
-        } catch {
-            let message = IPhoneUse.fullMessage(for: error)
-            FileHandle.standardError.write(Data((message + "\n").utf8))
-            exitCode = IPhoneUse.exitCode(for: error).rawValue
-            // If it failed because the connection went bad, let go so the next request opens a new tunnel.
-            // Error messages are written to say "connection" or "tunnel" for exactly this check.
-            let lower = message.lowercased()
-            if lower.contains("connection") || lower.contains("tunnel") { SessionPool.drop() }
+        for attempt in 0..<2 {
+            do {
+                var command = try IPhoneUse.parseAsRoot(args)
+                try command.run()
+            } catch {
+                let message = IPhoneUse.fullMessage(for: error)
+                // If it failed because the connection went bad, let go so the next request opens a new tunnel.
+                // Error messages are written to say "connection" or "tunnel" for exactly this check.
+                let lower = message.lowercased()
+                let connection = lower.contains("connection") || lower.contains("tunnel")
+                if connection { SessionPool.drop() }
+                // A tunnel cached while idle can be dead by the next request, and that request failed with
+                // "connection lost" while the same command run again worked (PITFALLS #62). A command that
+                // only reads, and has printed nothing yet, is run once more on a fresh tunnel. Input isn't:
+                // it may have reached the device before the failure.
+                fflush(stdout)
+                if connection, attempt == 0, let first = args.first, Self.readOnly.contains(first),
+                    lseek(outFD, 0, SEEK_END) == 0
+                {
+                    continue
+                }
+                FileHandle.standardError.write(Data((message + "\n").utf8))
+                exitCode = IPhoneUse.exitCode(for: error).rawValue
+            }
+            break
         }
 
         fflush(stdout)

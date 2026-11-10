@@ -47,7 +47,14 @@ enum InstallationProxy {
         if nameOrBundle.range(of: #"^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$"#, options: .regularExpression)
             != nil
         {
-            return nameOrBundle
+            // With a single dot it can be an app's name too ("Name.com"): launched as a
+            // bundle ID it only said "The application failed to launch" (PITFALLS #65). Bundle IDs
+            // nearly always have three parts or more, so only these pay for the list.
+            guard nameOrBundle.filter({ $0 == "." }).count == 1 else { return nameOrBundle }
+            let named = try browse(rsd: rsd, includeSystem: true).filter {
+                !$0.hidden && $0.name.caseInsensitiveCompare(nameOrBundle) == .orderedSame
+            }
+            return named.count == 1 ? named[0].bundleId : nameOrBundle
         }
 
         let apps = try browse(rsd: rsd, includeSystem: true).filter { !$0.hidden }

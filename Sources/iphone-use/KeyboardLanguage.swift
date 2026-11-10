@@ -7,7 +7,7 @@ import Foundation
 /// keyboard is Korean too: on an iPhone whose layout is Dubeolsik, typing "언제와" while the on-screen
 /// keyboard was English left the loose jamo `ㅇㅓㄴㅈㅔㅇㅗㅏ` in a chat's input field, one tap away from
 /// being sent (PITFALLS #11, #58). `ctrl+space` switches the on-screen keyboard, so `type` and `text`
-/// switch it to Korean before Hangul and back afterwards.
+/// switch it to Korean before Hangul and back afterwards (`OnScreenKeys.type`).
 enum KeyboardLanguage: String {
     case korean, latin
 
@@ -16,13 +16,15 @@ enum KeyboardLanguage: String {
     static func detect(in lines: [TextRecognizer.Line], height: CGFloat) -> KeyboardLanguage? {
         guard let top = TextRecognizer.keysTop(in: lines, height: height) else { return nil }
         var jamo = 0, latin = 0
-        for line in lines where line.frame.midY >= top - height * 0.005 {
-            let text = line.text.trimmingCharacters(in: .whitespaces)
-            guard text.count == 1, let character = text.first, let scalar = text.unicodeScalars.first else { continue }
-            if (0x3131...0x3163).contains(scalar.value) {
-                jamo += 1
-            } else if character.isASCII && character.isLetter {
-                latin += 1
+        // Keys merged into one line ("QWERT") count one by one.
+        for line in lines where line.frame.midY >= top - height * 0.005 && TextRecognizer.keyCount(line) > 0 {
+            for character in line.text where !character.isWhitespace {
+                guard let scalar = character.unicodeScalars.first else { continue }
+                if (0x3131...0x3163).contains(scalar.value) {
+                    jamo += 1
+                } else if character.isASCII && character.isLetter {
+                    latin += 1
+                }
             }
         }
         // OCR reads a few Korean keys as Latin look-alikes (ㅇ as "o", ㅣ as "l"), so Latin must clearly win.
@@ -46,34 +48,21 @@ enum KeyboardLanguage: String {
         Thread.sleep(forTimeInterval: 0.35)
     }
 
-    /// Switches the on-screen keyboard to Korean when it shows Latin keys. Returns whether it switched,
-    /// so the caller can switch back with `restore`. Does nothing when the language can't be read (the
-    /// number pad): typing goes ahead, and `type` checks the result.
-    static func switchToKorean(from start: KeyboardLanguage?, hid: HIDService, rsd: RemoteServiceDiscovery) throws -> Bool {
-        guard start == .latin else { return false }
+    /// Steps the on-screen keyboard to `target` with `ctrl+space`. Returns the screen's lines once its
+    /// keys show, or nil when `maxSwitches` presses didn't get there (the device has no such keyboard).
+    static func step(to target: KeyboardLanguage, hid: HIDService, rsd: RemoteServiceDiscovery) throws
+        -> [TextRecognizer.Line]?
+    {
         for _ in 0..<maxSwitches {
             try pressSwitch(hid)
-            if try current(rsd: rsd) == .korean { return true }
+            let image = try ScreenText.litImage(rsd: rsd)
+            let lines = try TextRecognizer.lines(in: image)
+            if detect(in: lines, height: CGFloat(image.height)) == target { return lines }
         }
-        try restore(hid: hid, rsd: rsd)
-        throw InputFailure.noKorean(
-            """
-            The on-screen keyboard is not Korean, and ctrl+space did not reach a Korean keyboard \
-            (\(maxSwitches) tries). Nothing was typed. Hangul only composes with a Korean on-screen \
-            keyboard: ask the user to add one (Settings › General › Keyboard › Keyboards), or use paste.
-            """)
+        return nil
     }
 
-    static let switchedNote = "(switched the on-screen keyboard to Korean for the Hangul, then back)"
-
-    /// Steps the on-screen keyboard back to a Latin one. With several Latin keyboards it stops at the
-    /// first it reaches, which may not be the one the user had.
-    static func restore(hid: HIDService, rsd: RemoteServiceDiscovery) throws {
-        for _ in 0..<maxSwitches {
-            try pressSwitch(hid)
-            if try current(rsd: rsd) == .latin { return }
-        }
-    }
+    static let switchedNote = "(switched the on-screen keyboard for the typing, then back)"
 
     /// True when `typed` reads like Hangul that didn't compose: three or more loose jamo in a row
     /// (`ㅇㅓㄴ`), or the Dubeolsik keys as Latin letters (`djswp`, on a device whose layout is English).
@@ -93,5 +82,18 @@ enum KeyboardLanguage: String {
         // ordinary words.
         let part = keys.count >= 5 ? keys.count - 1 : keys.count
         return seen.contains(String(keys.prefix(part))) || seen.contains(String(keys.suffix(part)))
+    }
+
+    /// The line showing Latin letters that came out as Hangul jamo, if any: the typed word ("Hello") is
+    /// nowhere on the screen and a line has loose jamo. On a device whose keyboard layout is Dubeolsik,
+    /// "Hello" typed into a note came out as "ㅗㄷㅣㅣㅐ" with no word from `type` (PITFALLS #63).
+    static func latinAsJamo(_ lines: [String], intended: String) -> String? {
+        let words = intended.split(whereSeparator: { !($0.isASCII && $0.isLetter) }).filter { $0.count >= 2 }
+        guard let slice = words.max(by: { $0.count < $1.count }) else { return nil }
+        let word = String(slice)
+        if lines.contains(where: { $0.localizedCaseInsensitiveContains(word) }) { return nil }
+        return lines.first { line in
+            line.unicodeScalars.filter { (0x3131...0x3163).contains($0.value) }.count >= 2
+        }
     }
 }

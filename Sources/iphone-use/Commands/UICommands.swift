@@ -6,14 +6,22 @@ import Foundation
 struct UICommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "ui",
-        abstract: "Read the screen as a list of @t refs (text, plus toggles and icons), and save the screenshot with a grid.",
+        abstract: "Read the screen as a list of @t refs (text, plus toggles, check boxes, sliders and icons), and save the screenshot with a grid.",
         discussion: """
-            Each line is `@tN<TAB>text<TAB>grid cell`, top to bottom. Pass the ref to press / type. Controls
-            without text are found by their shape and listed in brackets: `[toggle on] Wi-Fi` (a switch, its
-            state and its row's label), `[chevron left]` (a common symbol), `[circle button]` / `[button]` (a filled
-            button with a glyph), `[icon]` (an unrecognized icon; --icons
-            asks the Mac's on-device model to name it: `[icon: paper plane]`). Only what's on screen is listed; scroll to see more. On the same screen refs stay the same; on a
-            new screen numbering restarts at 1.
+            Each line is `@tN<TAB>text<TAB>grid cell`, top to bottom. Pass the ref to press / type.
+            Controls without text are found by their shape and listed in brackets:
+              [toggle on] Wi-Fi          a switch, its state and its row's label
+              [checkbox off] Agree       a check box or radio button and the label after it
+              [selected] Today           the chosen item of its row (tab, segment, chip, day)
+              [slider 40%]               a slider, on its knob
+              [page dots] 2 of 7         a pager's dots
+              [chevron left]             a common symbol
+              [circle button] / [button] a filled button with a glyph
+              [icon]                     an unrecognized icon; --icons asks the Mac's on-device
+                                         model to name it: [icon: paper plane]
+            A popup over a dimmed screen is announced after the list, with the lines that are on it.
+            Only what's on screen is listed; scroll to see more. On the same screen refs stay the
+            same; on a new screen numbering restarts at 1.
             """
     )
 
@@ -55,12 +63,18 @@ struct UICommand: ParsableCommand {
     }
 }
 
-/// `@t12` -> 12.
-func parseRef(_ text: String) throws -> Int {
+/// `@t12` -> 12. Anything else fails; when it's the text of lines in the last list, the error names their
+/// refs, because pressing by text again would bring back the guessing PITFALLS #48 got rid of.
+func parseRef(_ text: String, udid: String? = nil) throws -> Int {
     var body = Substring(text)
     if body.hasPrefix("@") { body = body.dropFirst() }
     if body.hasPrefix("t") { body = body.dropFirst() }
-    guard let ref = Int(body), ref > 0 else { throw UIError.badRef(text) }
+    guard let ref = Int(body), ref > 0 else {
+        let entries = (try? DeviceResolver.udid(for: udid)).map { UIState.load(udid: $0).entries } ?? []
+        let exact = entries.filter { $0.text == text }
+        let similar = exact.isEmpty ? entries.filter { $0.text.localizedCaseInsensitiveContains(text) } : exact
+        throw UIError.badRef(text, matches: similar.prefix(5).map { "@t\($0.ref) \"\($0.text)\"" })
+    }
     return ref
 }
 
@@ -68,7 +82,7 @@ func parseRef(_ text: String) throws -> Int {
 struct PressCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "press",
-        abstract: "Tap a line from the ui list (@tN), text or [control], and report how the screen changed.",
+        abstract: "Tap a line from the ui list by its ref (@tN; a text line or a [control]), and report how the screen changed.",
         discussion: """
             Checks that the line is still where ui read it, then taps its center. If it moved, it's found again
             by its text; if it's gone, nothing is pressed. Once the screen settles, reports the result:
@@ -85,6 +99,9 @@ struct PressCommand: ParsableCommand {
     @Option(name: .long, help: "How long to hold, in seconds. 0.6 or more for a long press.")
     var hold: Double = 0.08
 
+    @Flag(name: .long, help: "Tap twice (a double tap: zoom a photo or a map, like a post).")
+    var double = false
+
     @Flag(name: .long, help: "Tap the right end of the line's row instead (a row's trailing ⓘ, a chevron, a toggle).")
     var trailing = false
 
@@ -97,7 +114,7 @@ struct PressCommand: ParsableCommand {
     var noUi = false
 
     func run() throws {
-        let ref = try parseRef(ref)
+        let ref = try parseRef(ref, udid: device.udid)
         try UIScreen.with(udid: device.udid) { screen in
             let entry = try screen.entry(ref)
             // HID before the screenshot: a new connection's first report waits until it is 0.4 s old
@@ -118,7 +135,12 @@ struct PressCommand: ParsableCommand {
                 print("Pressed the right end of the row of \(label)")
             } else {
                 try tap(rect, input: input, hold: hold)
-                print("Pressed \(label)")
+                if double {
+                    // Two commands are too far apart to count as one double tap.
+                    Thread.sleep(forTimeInterval: 0.1)
+                    try tap(rect, input: input, hold: hold)
+                }
+                print("\(double ? "Double-tapped" : "Pressed") \(label)")
             }
             input.close()  // waits for the input to reach the device before the screen is read again
             if noUi { return }
@@ -169,10 +191,12 @@ struct TypeCommand: ParsableCommand {
         discussion: """
             iphone-use type @t3 "iphone case" --enter
             iphone-use type @t3 "New Name" --clear
-            If the on-screen keyboard doesn't appear, nothing is typed (it's not a text field). For Hangul, an
-            English on-screen keyboard is switched to Korean first and back afterwards. Latin letters come out
-            right only on a device whose keyboard layout is English. Characters not on the layout, like emoji,
-            can't be typed.
+            iphone-use type @t5 "the password" --secure
+            If the on-screen keyboard doesn't appear, nothing is typed (it's not a text field). A password
+            field is the exception: its keyboard never shows in screenshots, so pass --secure. The on-screen
+            keyboard is switched to the script being typed and back. Where the HID keys type the other
+            script (Hangul for Latin letters, or the reverse), those letters are tapped on the on-screen
+            keys instead (an iPhone held upright). Characters not on the layout, like emoji, can't be typed.
             """
     )
 
@@ -187,6 +211,11 @@ struct TypeCommand: ParsableCommand {
     @Flag(name: .long, help: "Clear the existing content first (⌘A → Backspace).")
     var clear = false
 
+    @Flag(
+        name: .long,
+        help: "The ref is a password field: its keyboard is hidden from screenshots, so type without seeing it.")
+    var secure = false
+
     @Flag(name: .long, help: "Don't read the screen again after typing.")
     var noUi = false
 
@@ -194,13 +223,20 @@ struct TypeCommand: ParsableCommand {
         guard (1...2).contains(arguments.count) else {
             throw ValidationError("Call it as type @t3 \"text\" or type \"text\".")
         }
+        if secure {
+            // Without the field just pressed, nothing says where the keys would go.
+            guard arguments.count == 2 else { throw ValidationError("--secure needs the field's ref: type @t5 \"text\" --secure.") }
+            guard !arguments[1].contains(where: HangulKeys.isHangul) else {
+                throw ValidationError("A password field takes no Hangul (its keyboard is always Latin).")
+            }
+        }
     }
 
     func run() throws {
-        let ref = arguments.count == 2 ? try parseRef(arguments[0]) : nil
+        let ref = arguments.count == 2 ? try parseRef(arguments[0], udid: device.udid) : nil
         let text = arguments.last!
         // Check that all of it can be typed before typing. Stopping halfway leaves the field half-filled.
-        let keys = try TextCommand.keys(for: text)
+        _ = try TextCommand.keys(for: text)
 
         try UIScreen.with(udid: device.udid) { screen in
             // Opened first so its 0.4 s settle (PITFALLS #54) overlaps finding the field.
@@ -210,25 +246,30 @@ struct TypeCommand: ParsableCommand {
                 let (rect, _) = try screen.locate(try screen.entry(ref))
                 try tap(rect, input: input)
             }
-            guard let keyboard = try keyboardAppears(rsd: screen.rsd, wait: ref != nil) else { throw UIError.noKeyboard }
+            // A focused secure field keeps its keyboard out of screen captures: `type` saw no keyboard
+            // and refused every password field (PITFALLS #64). With --secure the check is skipped; the
+            // wait is for the focus to land.
+            var keyboard: KeyboardLanguage?
+            var before: [TextRecognizer.Line] = []
+            if secure {
+                Thread.sleep(forTimeInterval: 0.6)
+            } else {
+                guard let seen = try keyboardAppears(rsd: screen.rsd, wait: ref != nil) else { throw UIError.noKeyboard }
+                (keyboard, before) = seen
+            }
             let hangul = text.contains(where: HangulKeys.isHangul)
-            let switched =
-                hangul ? try KeyboardLanguage.switchToKorean(from: keyboard, hid: input.hid, rsd: screen.rsd) : false
-
             if clear {
                 try input.hid.typeKey(0x04, modifiers: [0xE3])  // ⌘A
                 try input.hid.typeKey(0x2A, modifiers: [])  // Backspace
             }
-            for (usage, needsShift) in keys {
-                try input.hid.typeKey(usage, modifiers: needsShift ? [0xE1] : [])
-            }
-            // Switched back before Return: a Return that sends or searches can take the keyboard away.
-            if switched { try KeyboardLanguage.restore(hid: input.hid, rsd: screen.rsd) }
+            let outcome = try OnScreenKeys.type(text, input: input, rsd: screen.rsd, before: before, language: keyboard, beforeReturn: enter)
             if enter { try input.hid.typeKey(0x28, modifiers: []) }
             input.close()
 
-            print("Typed\(ref.map { " @t\($0)" } ?? "") ← \"\(text)\"\(enter ? " + Return" : "")")
-            if switched { print(KeyboardLanguage.switchedNote) }
+            // Not echoed: the output often lands in a log.
+            let shown = secure ? "\(text.count) characters (not shown)" : "\"\(text)\""
+            print("Typed\(ref.map { " @t\($0)" } ?? "") ← \(shown)\(enter ? " + Return" : "")")
+            outcome.printNotes()
             if noUi { return }
             let report = try screen.observeAfterAction()
             screen.printReport(report)
@@ -247,19 +288,29 @@ struct TypeCommand: ParsableCommand {
                     paste (ask the user to allow the paste prompt).
                     """)
             }
+            if !hangul, let wrong = KeyboardLanguage.latinAsJamo(screen.state.entries.map(\.text), intended: text) {
+                print(
+                    """
+                    Warning: the Latin letters came out as Hangul jamo — the screen reads "\(wrong)". This device's \
+                    keyboard layout is Korean, so typed Latin letters always do. Don't send or submit it: clear it \
+                    (type @tN "" --clear), then paste the text (ask the user to allow the paste prompt) or use a URL.
+                    """)
+            }
         }
     }
 
-    /// The on-screen keyboard's language if it's up (`.some(nil)` when up but unreadable), nil if it isn't.
+    /// The on-screen keyboard's language (nil when unreadable) and the screen's lines if it's up, nil if it isn't.
     /// If a text field was just pressed, wait a little for the slide-up animation.
-    private func keyboardAppears(rsd: RemoteServiceDiscovery, wait: Bool) throws -> KeyboardLanguage?? {
+    private func keyboardAppears(rsd: RemoteServiceDiscovery, wait: Bool) throws
+        -> (language: KeyboardLanguage?, lines: [TextRecognizer.Line])?
+    {
         for attempt in 0..<(wait ? 6 : 1) {
             if attempt > 0 || wait { Thread.sleep(forTimeInterval: 0.3) }
             let image = try ScreenText.litImage(rsd: rsd)
             let lines = try TextRecognizer.lines(in: image)
             let height = CGFloat(image.height)
             if TextRecognizer.keyboardVisible(in: lines, height: height) {
-                return .some(KeyboardLanguage.detect(in: lines, height: height))
+                return (KeyboardLanguage.detect(in: lines, height: height), lines)
             }
         }
         return nil

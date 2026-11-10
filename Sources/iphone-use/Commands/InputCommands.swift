@@ -125,6 +125,9 @@ struct TouchCommand: ParsableCommand {
     @Option(name: .long, help: "Hold time (seconds). 0.6 or more for a long press.")
     var hold: Double = 0.08
 
+    @Flag(name: .long, help: "Tap twice (a double tap: zoom a photo or a map, like a post).")
+    var double = false
+
     @Option(
         name: .long,
         help: "If you read the coordinates off an image downscaled to this width, that width. Converted to device pixels.")
@@ -195,6 +198,10 @@ struct TouchCommand: ParsableCommand {
             try session.hid.press(x: point.x, y: point.y, duration: hold)
         } else {
             try session.hid.tap(x: point.x, y: point.y, hold: hold)
+            if double {
+                Thread.sleep(forTimeInterval: 0.1)
+                try session.hid.tap(x: point.x, y: point.y, hold: hold)
+            }
         }
         if let snappedTo, let cell {
             // The control's own cell, so the agent can tell whether it's the thing it meant: a cell's corner
@@ -443,9 +450,9 @@ struct TextCommand: ParsableCommand {
         commandName: "text",
         abstract: "Type text into the focused field (ASCII, Hangul).",
         discussion: """
-            For Hangul, an English on-screen keyboard is switched to Korean first and back afterwards (not with
-            --force). Latin letters come out right only on a device whose keyboard layout is English. Check with
-            a screenshot after typing.
+            The on-screen keyboard is switched to the script being typed and back, and where the HID keys
+            type the other script, those letters are tapped on the on-screen keys (an iPhone held upright).
+            With --force none of that happens: the keys go out as they are. Check the result after typing.
             """
     )
 
@@ -523,13 +530,6 @@ struct TextCommand: ParsableCommand {
                 keys.append(key)
             }
         }
-        // No single input source types both correctly. Warn instead of silently typing it wrong.
-        if text.contains(where: HangulKeys.isHangul),
-            text.contains(where: { $0.isASCII && $0.isLetter })
-        {
-            FileHandle.standardError.write(
-                Data("Warning: Hangul and Latin letters are mixed. With a Korean input source, Latin letters come out as jamo.\n".utf8))
-        }
         return keys
     }
 
@@ -543,7 +543,8 @@ struct TextCommand: ParsableCommand {
         // Without focus in a field, keys are eaten as the app's keyboard shortcuts. In Music, after tapping
         // only the Search tab and not the field, typing an artist name had the space start playback and
         // the letters flip to unrelated screens. Check focus by whether the on-screen keyboard is up (~0.5 s).
-        var switched = false
+        var before: [TextRecognizer.Line] = []
+        var language: KeyboardLanguage?
         if !force {
             let image = try ScreenText.litImage(rsd: session.rsd)
             let lines = try TextRecognizer.lines(in: image)
@@ -556,23 +557,14 @@ struct TextCommand: ParsableCommand {
                     (space = play in Music). If a physical keyboard is hiding the on-screen keyboard, use --force.
                     """)
             }
-            if text.contains(where: HangulKeys.isHangul) {
-                switched = try KeyboardLanguage.switchToKorean(
-                    from: KeyboardLanguage.detect(in: lines, height: CGFloat(image.height)),
-                    hid: session.hid, rsd: session.rsd)
-            }
+            before = lines
+            language = KeyboardLanguage.detect(in: lines, height: CGFloat(image.height))
         }
 
-        var body = keys
-        if enter { body.removeLast() }
-        for (usage, needsShift) in body {
-            try session.hid.typeKey(usage, modifiers: needsShift ? [0xE1] : [])
-        }
-        // Switched back before Return: a Return that sends or searches can take the keyboard away.
-        if switched { try KeyboardLanguage.restore(hid: session.hid, rsd: session.rsd) }
+        let outcome = try OnScreenKeys.type(text, input: session, rsd: session.rsd, before: before, language: language, beforeReturn: enter)
         if enter { try session.hid.typeKey(0x28, modifiers: []) }
         print(keys.count == text.count ? "Typed \(text.count) chars" : "Typed \(text.count) chars (\(keys.count) keystrokes)")
-        if switched { print(KeyboardLanguage.switchedNote) }
+        outcome.printNotes()
         try shot.capture(after: session, udid: device.udid)
     }
 }

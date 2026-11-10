@@ -31,6 +31,9 @@ struct PasteCommand: ParsableCommand {
     @Flag(name: .long, help: "Only set the clipboard; don't send ⌘V.")
     var clipboardOnly = false
 
+    @Flag(name: .long, help: "Don't read the screen (ui) afterwards.")
+    var noUi = false
+
     func validate() throws {
         guard (text == nil) != (file == nil) else {
             throw ValidationError("Give exactly one of: text, or --file.")
@@ -63,6 +66,8 @@ struct PasteCommand: ParsableCommand {
         SessionPool.release(hid)
         print("Pasted \(text.count) chars — the device may have shown a paste permission prompt. Don't allow it on the user's behalf.")
         try shot.capture(after: nil, udid: device.udid)
+        // The list shows the prompt (and its buttons) or the pasted text, so the next step needs no extra ui.
+        if !noUi { UIScreen.report(afterActionOn: device.udid) }
     }
 }
 

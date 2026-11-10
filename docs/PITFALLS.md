@@ -1,73 +1,77 @@
 # Pitfalls and reverse-engineering notes
 
 Everything here was observed directly on real devices. None of it is in public documentation,
-because there is none. The entries are numbered so code comments can cite them as `PITFALLS #N`.
+because there is none. Code comments cite these entries as `PITFALLS #N`.
 
-If some code looks odd, read the matching entry before "fixing" it. Most of these spots have
-already broken once. Add new entries at the end with the next number, and never renumber the
-existing ones, because comments point at those numbers.
+**If some code looks odd, read the entry it cites before "fixing" it.** Most of these spots have
+already broken once.
 
-A few entries mention commands that were removed later. The findings still explain today's
-code.
+## How this file works
 
-The accessibility path (the "AX protocol" and "AX pitfalls" sections and #35–#47) was removed in
-favor of OCR on screenshots (#48). Those entries stay as a record of what was tried; no code cites
-them anymore, except #42 for comparing an area between two frames.
+- **Entries are in the order they were found**, not by topic. Use the index below to find the
+  entries on a topic.
+- **Numbers never change**, because comments point at them. Add a new entry at the end with the next
+  number.
+- **An entry says** what was tried, how it broke, and what the code does now. When a later entry
+  changes the picture, add a short note to the old one that points to it; don't rewrite history.
+- **Some numbers are missing here.** #1–4, #35–41, #43, #45 and #47 belong to the accessibility path
+  that OCR replaced (#48). They are in [`PITFALLS-archive.md`](PITFALLS-archive.md).
+- A few entries mention commands that were removed later (`find`, `back`). The findings still explain
+  today's code.
+- Keep private data out: no real names, account details or third-party app names. Say "a messenger
+  app".
 
-## AX protocol
+## Index by topic
 
-The RPC surface of `com.apple.accessibility.axAuditDaemon.remoteserver` can be read straight
-from the `AccessibilityAuditDeviceManager` binary, where the selector names are left intact.
+| Topic | Entries |
+|---|---|
+| Connection, tunnel, sharing the device with Xcode | #19, #20, #26, #27, #44, #55 |
+| Daemon | #28, #50, #62 (dead cached tunnel) |
+| CoreDevice services and features (finding them, envelopes, get/set) | #12, #14, #21, #22 |
+| DTX (Instruments, used to revive a stuck launch daemon) | #5, #6, #7, #20 |
+| Apps and URLs | #20, #21, #29, #65 (a name with a dot) |
+| Screenshots and waiting for the screen to settle | #13, #25, #34, #49 |
+| Touch coordinates, panels and the grid | #8, #9, #10, #23, #51, #53 |
+| HID delivery and timing (lost taps and keys) | #15, #16, #17, #18, #50, #54 |
+| Scrolling and swipes | #24, #31, #33 |
+| Typing: layouts, Hangul, on-screen keys, paste | #11, #18, #30, #32, #58, #63, #64 |
+| Telling a keyboard from a keypad or a calendar; the suggestion bar | #31, #61, #63, #64, #65 |
+| Reading the screen: OCR lines, status items, the diff after an action | #48, #56, #62, #63, #64, #65, #66 |
+| Controls without text: switches, symbols, buttons by shape | #52, #59, #60, #61, #62, #63, #64, #65 |
+| State read from pixels: check boxes, selection, sliders, page dots, popups | #66 |
+| Naming icons with the on-device model | #57 |
+| Pressing the right thing (moved rows, banners, cell snapping) | #42, #46, #59, #61 |
+| iPad | #11, #23, #56 |
+| Foldable iPhone | #51, #53 |
 
-Host → device:
-```
-deviceInspectorMoveWithOptions:                  tree traversal (direction/allowNonAX/includeContainers)
-deviceElement:valueForAttribute:                 read an attribute value
-deviceElement:setValue:attribute:                write an attribute
-deviceElement:performAction:withValue:           perform an action (AXAction-2010 = Activate)
-deviceFetchElementAtNormalizedDeviceCoordinate:  coordinate hit test (requires NSValue<CGPoint>)
-deviceInspectorFocusOnElement: / PreviewOnElement:
-deviceSetAuditTargetPid: / deviceSetAuditUIPid:
-deviceRunningApplications / deviceAccessibilitySettings
-```
+## Known gaps
 
-Device → host:
-```
-hostInspectorCurrentElementChanged:
-hostInspectorCurrentElementPropertiesChanged:
-hostDeviceFrontmostAppPidDidChange:
-hostFoundAuditIssue:
-```
+Open problems, with the entry that describes each:
 
-Element properties arrive grouped into sections: Basic (Label/Value/TraitsHumanReadable/Identifier/Hint/
-UserInputLabels), Actions, Element (class name / memory address / view controller), and Hierarchy
-(`_AXHierarchyElementsAttribute` → walk children via `ChildrenValue_v1`).
+- The HID keyboard's layout can't be chosen; what the keys type depends on the device and the app
+  (#11, #58, #64). Tapping the on-screen keys covers an iPhone held upright only (#64).
+- Touch rotation is unverified for an iPad held in portrait and for `rot180` (#23, #51).
+- A notification banner still takes a tap near the top; the guard was not merged (#46).
+- Icons on a glass bar over a photo or video aren't found, and text behind a glass bar reads as
+  noise (#52, #64).
+- A slider at 0% or 100% has no line, nor does a picker wheel's selected value (#63, #66).
+- A popup is only noticed over a dimmed light page: not in dark mode, not a system alert (#66).
+- A check box whose states differ only in color, and a selection shown only by weight, aren't
+  read (#66).
+- The passcode screen captures as black, so it's reported as "screen is off" (#63).
+- A custom-drawn control can get a wrong symbol name (#64). Home-screen icon artwork gives `[icon]`
+  lines (#62).
+- There is no pinch gesture (#64).
 
-## AX pitfalls
+## Trust and entitlements
 
-### 1. Session state is sticky
+DeviceHub.app has **empty** entitlements. All trust is handled by the pairing record and the
+`CoreDeviceService` daemon. `axAuditService.xpc` holds
+`com.apple.private.accessibility.remoteDeviceContent` and others, but the device side has no way to
+verify host entitlements (lockdown/DTX carry no code-signing information), so that is only a local
+macOS gate. In practice a bare client can read everything.
 
-If a dead pid is left in `deviceSetAuditTargetPid:`, it stays in the daemon even after the client
-exits, and **blocks focus events for every later connection.** Always reset it to 0 when a
-connection starts and when it ends.
-
-### 2. It competes with Accessibility Inspector
-
-Stateless calls coexist fine, but a focus session is exclusive: whichever side grabs it, the other
-starves.
-
-### 3. Host and device protocol versions drift independently
-
-An iOS 27.2 device reported `deviceInspectorEnable:` in its capabilities, a string that does not
-exist in the Xcode 27.0 framework. Ask for capabilities first and branch on them.
-
-### 4. Overlapping moves break the daemon
-
-If a second `deviceInspectorMoveWithOptions:` is sent before the focus event for the previous one
-arrives, every later `deviceElement:valueForAttribute:` returns an empty response (no payload,
-errorStatus 0). It does not recover until the connection is reopened. While waiting for a focus
-event, do not mistake some other event (such as `hostInspectorMonitoredEventTypeChanged:`) for
-"the move failed" and resend the move.
+## Entries
 
 ### 5. `_setDispatchValidator:` is not what its name suggests
 
@@ -89,8 +93,6 @@ check against its global selector registry and throw an NSException, and the eve
 `otool -arch arm64` shows the wrong code. The `imp - dli_fbase` offset obtained from `dladdr`
 matches the arm64e slice.
 
-## HID pitfalls
-
 ### 8. Touch coordinates are normalized to 0..65535
 
 Not pixels, not points. Out-of-range coordinates are *silently dropped*: no error, no log, nothing
@@ -111,6 +113,9 @@ After calling `DisplayService.stop_all_streams`, `devicectl device capture scree
 responding (a reboot clears it). We don't need a stream, so we never open one.
 
 ### 11. Keyboard sends key positions, and the layout is fixed per device
+
+Later entries narrow this: the layout also differs per app on one device (#58, #64), and where the HID
+keys type the wrong script, `type` taps the on-screen keys instead (#64).
 
 Which character appears is decided by the layout the device attaches to the virtual keyboard
 (surface 512), and that layout does not follow the input source. The iPhone (iOS 27.2) is always
@@ -170,12 +175,11 @@ silently. You must read it back with PULL to confirm, and since the device close
 after handling PUSH, the connection can't be reused either. When the peer closes after a message
 that has no reply, `write` kills the process with SIGPIPE, so `SO_NOSIGPIPE` is needed too.
 
-## Wi-Fi pitfalls
-
-Wi-Fi uses the same path: `remotepairingd` hands out tunnels for Wi-Fi devices too. What differs is
-latency and packet timing, and that broke several things that only worked on USB by luck.
-
 ### 15. The HID service drops the connection after replying, then goes quiet
+
+#15–#22 were found over Wi-Fi. Wi-Fi uses the same path as USB (`remotepairingd` hands out tunnels for
+Wi-Fi devices too); what differs is latency and packet timing, and that broke several things that only
+worked on USB by luck.
 
 Send `universalhidservice` a request that gets an answer (such as `connectedServices`) and the
 device closes the connection right after replying, then ignores new handshakes for more than 10
@@ -209,8 +213,8 @@ person types: modifier → modifier+key → modifier → all released.
 
 ### 19. MobileDevice can't see Wi-Fi devices
 
-`AMDeviceNotificationSubscribe` only reports USB devices. So lockdown services (the accessibility
-daemon, installation_proxy, etc.) are opened on the port the device advertises in RSD as
+`AMDeviceNotificationSubscribe` only reports USB devices. So lockdown services (installation_proxy
+and the like) are opened on the port the device advertises in RSD as
 `<name>.shim.remote`. Connect over TCP and send a lockdown-style plist (4-byte big-endian length +
 XML) `{Request: RSDCheckin, Label, ProtocolVersion: "2"}`; two replies come back, `RSDCheckin` and
 `StartService`, and every byte after that is the service's own wire protocol. The tunnel is already
@@ -274,8 +278,6 @@ Liquid Glass opacity is a Float on the device side, so a Double like 0.8 is reje
 doesn't fit in Float"; we truncate to Float before sending. Location simulation is
 `setsimulatedlocation` / `clearsimulatedlocation` under `simulatelocation` on `locationservice`.
 
-## iPad pitfalls
-
 ### 23. Touch coordinates follow the panel's native orientation
 
 On the iPad, `getdisplayinfo` reports `bounds` and the screenshot as landscape 2420×1668, but
@@ -292,8 +294,6 @@ Even after holding the end point for 0.2 s before lifting, a scroll dragged at c
 flings with the last real movement speed. `scroll` eases out toward the end so the final speed is
 near zero. The content then moves by the drag distance minus the touch slop (around 50 px).
 
-## Device, connection and daemon pitfalls
-
 ### 25. Capture succeeds even when the screen is off
 
 The device returns a black image with no error, and an agent reading it goes looking for elements
@@ -303,7 +303,7 @@ There is no good way to detect the lock state. The `getlockstate` feature is rej
 as "not implemented", and accessibility's `deviceRunningApplications` returned an empty array
 whether locked or not. MobileDevice's `AMDeviceValidatePairing` failing with 0xE8000025 is not a
 lock signal either: the iPad failed with the same code while unlocked (looks like a lockdown pairing
-record problem). So accessibility commands fall back to the tunnel path when USB lockdown fails.
+record problem). So lockdown services fall back to the tunnel path when USB lockdown fails.
 
 ### 26. Without a device selector, commands went to whichever device remotepairingd listed first
 
@@ -335,8 +335,6 @@ and that command runs without the daemon.
 
 "App Store" is actually `App Store`, so `contains("app store")` didn't match. Name comparison
 now strips all kinds of whitespace.
-
-## Input and gesture pitfalls
 
 ### 30. Every clipboard paste shows a permission prompt
 
@@ -379,263 +377,11 @@ time and appended "still moving", and `wait --stable` failed with a timeout so t
 the screen, the screen counts as settled and that rectangle is reported. `wait --stable` saves the
 last frame to `-o` even on timeout.
 
-## Finding and pressing elements
-
-### 35. Accessibility gives no element coordinates
-
-What we found while trying to tap elements by name (iOS 27.2):
-- There is no frame attribute. The inspector exposes only Basic/Actions/Element/Hierarchy, and
-  asking for `AXFrame`, `Frame` or `AXActivationPoint` directly returns nil. It is still nil when the
-  attribute descriptor's `ValueTypeValue_v1` is varied from 0 to 8.
-- The hit test `deviceFetchElementAtNormalizedDeviceCoordinate:` only returns an empty answer (16
-  bytes, errorStatus 0). Adding monitored event types (0, 1, 2), `deviceInspectorEnable:` or
-  `deviceInspectorInformCurrentCursorPosition:` changed nothing, on both the home screen and
-  Settings. `deviceFetchResolvesElementsOnSimulator` is 0 in the capabilities, so it looks
-  simulator-only.
-- `deviceFetchSpecialElement:` returns the app's first element (the header) for 0 and 1, nil for
-  everything else.
-- Writing a value with `deviceElement:setValue:attribute:` is silently ignored, just like
-  `performAction` (even on the Settings search field).
-
-So element rects are measured from the boxes the inspector draws on screen instead (#36, #37).
-
-### 36. The inspector's yellow preview box shows an element's rect
-
-There is no accessibility request that returns coordinates (#35), but
-`deviceInspectorPreviewOnElement:` draws a translucent yellow box the size of the element on the
-device screen. Compare screenshots before and after: the bounding box of the pixels whose yellowness
-(red minus blue) increased is the element's rect. `press` falls back to this when the green focus
-box (#37) can't be measured. Findings:
-- The yellow preview box and the inspector's green focus box **stay on screen after the session
-  closes.** Only `deviceInspectorShowVisuals: NO` clears them. Leave them and the user has a yellow
-  box floating on their screen.
-- Don't locate the element from all changed pixels. The green focus box drawn while moving focus
-  disappearing also counts as change, and once that returned the search field's rect instead. Count
-  only the pixels that got more yellow.
-- Jumping focus straight to a distant element with `deviceInspectorFocusOnElement:` doesn't make the
-  view scroll along, and the box was drawn off screen. Walk to the element step by step instead. On
-  such a walk the first focus event sometimes arrives more than 1 s late, so the wait is retried a
-  few times (otherwise it stops on the first element and measures the wrong place).
-- Audit (`deviceBeginAuditCaseIDs:`) also delivers `ElementRectValue_v1` (an `NSRect` in points) in
-  `hostFoundAuditIssue:`, but **only for elements with an issue.** Element tokens obtained from an
-  audit only have readable attributes in a session with focus monitoring enabled.
-- If focus is already on the first element, a "move to first" (`direction 5`) produces no event,
-  because focus didn't change, and the second of two back-to-back commands failed with "no focus
-  events arrive". When no event comes, focus now steps away and back (#37).
-- No focus events arrive on the home screen (SpringBoard) (iPadOS 26.6). The lock screen and apps
-  work. If no element is picked up, the command fails with `ScanError.noFocusEvents` rather than
-  returning an empty list, because an empty list reads as "no such element".
-
-### 37. The green focus box shows an element's rect
-
-Findings from measuring elements while stepping focus through a screen:
-- Moving focus makes the inspector draw a green focus box around the element. Compare a frame with it
-  shown and a frame after clearing it with `deviceInspectorShowVisuals: NO`: the bounding box of the
-  pixels that **lost green** is the element's rect. In Settings › General it matched the OCR
-  coordinates within a few pixels.
-- The green box is drawn **only when focus changes.** Turning ShowVisuals back on after clearing, or
-  sending `deviceInspectorFocusOnElement:` for the same element, didn't redraw it. So an element that
-  already has focus is measured with the yellow preview box (#36).
-- **"Move to last" (direction 6) is unreliable.** In Settings › General it went to the first element
-  (the back button), and when already on the first element there was no event at all. So the
-  workaround "no event because already first → go to last and back" (#36) failed completely on that
-  screen with "no focus events arrive". It now steps one forward and back instead, and nothing
-  relies on "move to last".
-- For both the green and yellow boxes, don't take the bounding box of all changed pixels. A Live
-  Activity in the Dynamic Island (a music waveform) extended right below the status bar and kept
-  moving, and the "General" row got measured from the very top of the screen down to that row
-  (1172x1329). Only the single largest connected region of changed pixels is used
-  (`AXWalker.largestRegion`).
-- iOS 16.7 (iPhone X) has no CoreDevice tunnel, so even `screenshot` fails, but accessibility works
-  over USB lockdown. `scan` and `ui` run; measuring rects needs screen capture and
-  doesn't. Such a device shows up in `devices` (via MobileDevice) but can't be selected by name,
-  because name resolution only looks at the CoreDevice list; pass the UDID.
-
-### 38. Driving the device from the accessibility list alone (`ui`, `press`, `type`, `back`)
-
-The commands that found targets by OCR (`find`, `tap "text"`, `wait "text"`, `tap --ax`, `focus`)
-were removed; targets are now pressed by their ref in the element list. The list is stored in
-`~/.iphone-use/ui-<udid>.json` as ref, token and description. To press, it walks from the focus
-position left on the device to the target, then measures the rect with the green focus box (#37).
-
-#### Tokens and list identity
-
-- **The first 4 bytes of a token are the app's pid** (little-endian). Settings (pid 36934) is
-  `46900000…`, SpringBoard (pid 39) is `27000000…`. Matching the pid against executables from
-  `listprocesses` gives the app name, and `back` is refused on the home screen (an edge swipe from
-  the left opened the widget screen).
-- **The same element can get a new token.** After sweeping the Settings root screen to the end and
-  coming back, the Apple Account row had the same description but a new token (looks like cell
-  reuse), and a list taken moments earlier stopped with "the screen changed since the list was
-  taken". While walking, an element **at the same position with the same token or the same
-  description** is treated as the same element and its token is updated. Diffing (`observe`) also
-  pairs by token first, then by description. Conversely, the navigation bar's back button **keeps the
-  same token across screens**; only its name changed ("Settings" → "Back").
-- **A messenger app's chat list changes even while walking.** Counting steps and checking at each one
-  drifted, so on a mismatch it seeks by description from the start (`seek`; when several share a
-  description, by which occurrence it is). `ui --find` also sweeps in one pass instead of continuing a
-  walk.
-- **Nearby-device and network lists gain and lose rows while walking.** Even with a fresh list,
-  `press` stopped with "the screen changed since the list was taken". It seeks by description the same way.
-
-#### Walking and scrolling
-
-- **When focus moves to an off-screen element, the view scrolls only just enough to show it.** Walking
-  back up from the end of the list to "General", the row ended up half under the translucent
-  navigation bar, and the tap hit the bar. It now goes three more steps in the walking direction and
-  comes back (50 ms per step). The first attempt dragged the content to the middle instead, but that
-  cost 4 more seconds because the back button attached to the bar was checked by dragging too.
-- **There is no direct way to the end of the list.** In the iOS 26 Settings app the search field is in
-  a bar at the very bottom of the screen, so it's at the end of the focus order (36th of 37), and the
-  close button during search comes just before the keyboard keys (around 70th). A subagent called
-  `--more` four times looking for the search field. Sending `previous` from the first element doesn't
-  wrap and produces no event, and `last` produced none either. So `ui --find` walks from the start,
-  filtering descriptions (6 s to the end of the Settings root screen). It was capped at 300 elements;
-  now 100 per call, and `ui --find … --more` searches the next 100, so a miss costs 5 s instead of 15.
-
-#### Measuring and timing
-
-- **For full-width rows the green box splits into two horizontal lines.** The left and right edges
-  are clipped by the screen edge and the fill is faint, so picking only the largest region measured a
-  row in a messenger app's chat list as its top border line (1290x16). The swipe then landed there
-  and opened the neighboring chat. If the largest region is a thin horizontal line, it is merged with
-  its partner line spanning the same x range (`largestRegion`). A rect with a side under 24 px is
-  never tapped (`UIScreen.measure`).
-- **Scrolling is judged from the box surroundings only (160 px).** Looking at the whole screen, an app
-  whose home screen plays a looping video of a person always read as "scrolling" and fell through to
-  the yellow preview box; the face (skin tones are quite yellow) was then taken as the preview box, and
-  a tab bar item was tapped in the middle of the video (two out of four times). The green box itself
-  was right every time. When the view scrolls, the content next to the element moves too, so the
-  surroundings are enough.
-- **Timing.** In the daemon one `press` takes 5–8 s: walk 0.1–0.8, measure 1.5 (one capture is 0.5 s,
-  two frames with the box shown and cleared; if the area around the box differs between the two
-  frames, the view is scrolling, so it re-measures on a settled frame with the yellow preview box),
-  tap 0.1, wait for the screen to settle 2 (a running Live Activity in the Dynamic Island delays the
-  verdict by a frame or two), re-sweep 1. Box detection runs at half size: scanning 3.6 million
-  pixels at full size took over 0.5 s per pass in a debug build.
-
-#### Going back
-
-- **The UIKit back button's identifier is `BackButton` regardless of language** (from the focus
-  event's `AccessibilityIdentifier_v1`). `back` tries the identifier, then (since #43) a back label
-  instead of the edge swipe it once used; if neither works it presses nothing and reports the top-left element,
-  because in some apps the top-left isn't Back (in some apps, e.g. a social app, it's a "side menu").
-
-#### Keyboard keys
-
-- **Keyboard keys are elements too** (on a Korean device, a jamo followed by the Korean for "play sound, Keyboard Key").
-  They come last in focus order, and the focus event has no numeric traits value, so there was no
-  language-independent way to filter them. They stay in the list, and whether the keyboard is up is
-  judged from single-character rows at the bottom of the screen (`TextRecognizer.keyboardVisible`;
-  it doesn't pick targets).
-
-#### Row-end ⓘ buttons
-
-- **ⓘ isn't an element; it's attached as an action.** Tapping a Bluetooth or Wi-Fi row
-  connects/disconnects, and the settings are behind ⓘ. Right after launching Settings fresh, the
-  device-side `next` in the Bluetooth list skipped the ⓘ on the AirPods row (the one on the Watch row
-  sometimes appeared), and the ⓘ on a Wi-Fi row is never an element. Instead, the inspector
-  `Actions_v1` field of the focus event has a custom action
-  `AXCustomAction-Name:<"More Info" in the device language>\nTarget:0x…\nSelector:…`. Running it with
-  `performAction` is silently ignored, like activation (`AXAction-2010`) (#35). So it measures the
-  row and taps **within 0.6× the row height from the right edge** (on a 164 px row the ⓘ center is
-  100 px from the edge, confirmed by drawing on a screenshot). For Bluetooth the selector is
-  `_accessibilityHandleDetailButtonPress:`, so `--action` finds it automatically; on Wi-Fi it's
-  attached as a block with `Selector:(null)`, indistinguishable from other actions, so the caller
-  uses `--trailing`.
-
-#### Swipe-revealed buttons
-
-- **Swipe-revealed buttons (`press --swipe`).** Custom actions (Delete, Leave) can't be performed, so
-  it swipes the row by only 35% to reveal the buttons, then taps. Findings:
-  - The buttons appear in focus order **right after the swiped row**, with names (a messenger app's
-    "Leave, button"; Messages' "Hide Alerts" and "Trash"). Only elements with no actions that lie
-    within the swiped row's height count as buttons: in the messenger app the next item was another
-    chat row.
-  - The small scroll that follows focus didn't close them, but sweeping again from the start so that
-    **the row left the screen and came back** did. So there's no re-sweep after swiping, and revealed
-    buttons are tapped at the rect measured during the swipe instead of walked to.
-  - At **the moment focus first lands on a button** the rect can't be measured (nil). Stepping one away
-    and back measured it exactly as 150x150.
-  - Near the bottom tab bar the box is partly covered and measures wrong. The row is dragged to the
-    middle before swiping, and if it still doesn't look like a row, it doesn't swipe.
-
-#### Grid fallback
-
-- **When the image is the only option, pick a grid cell (`screenshot --grid`, `touch --cell`).**
-  Guessing pixel numbers on a downscaled image misses by tens of pixels, multiplied by the downscale
-  factor. Cells are defined in device pixels (10 cells on the short side, 129 px on iPhone), so they
-  point to the same place however far the image is shrunk. Labeling every cell covered the small text
-  and icons underneath, so like a chessboard the labels go only in the outer margin on all four sides,
-  and every fifth line is thicker so the 22 vertical cells can be counted in chunks.
-
-#### Daemon session
-
-- **The daemon holds the accessibility session open on the tunnel path**, because opening one takes
-  about 1.3 s. The lockdown path only lives inside a MobileDevice session block and can't be held.
-  Each request drains queued events and clears the audit target pid. Unless the error is one where we
-  chose to stop (`KeepsSession`), the session is released.
-
-### 39. Walking past the end of a page turns a horizontal pager
-
-In Weather (one page per city, iOS 27.2), focus order runs through the pages in sequence: the page
-indicator in the bottom bar, the visible page's content, then **the next page's content**. When `next`
-crosses from the last element of one page to the first of the next, the pager scrolls to that page,
-just as VoiceOver does. No event marks the crossing: nothing arrives besides
-`hostInspectorCurrentElementChanged:`, and the tokens and descriptions don't tell pages apart.
-
-- Every `ui --find` swept to the end, and the wrap back to the first element didn't scroll the
-  pager back, because that element (the page indicator) sits outside the pager. Each sweep left the
-  app one page further on, and a few sweeps ended on the last city. Now, when a sweep wraps
-  (`walkFromFirst`, `ui --more` reaching the end), focus steps onto the second element and back. That
-  element is the start page's first content, and stepping onto it scrolls the pager back.
-- Jumping focus (`deviceInspectorFocusOnElement:`) to a start-page element, then stepping from it,
-  did **not** turn the pager back. Only crossing a page boundary with `next`/`previous` does. A sweep
-  that stops at `findLimit` without wrapping can still leave the app on another page; walking back
-  would cost as many steps as the sweep took.
-- The list is still in focus order, so it includes later pages. `ui` right after swiping to page 2
-  sometimes listed page 1 first, and the sweep brought page 1 back.
-
-### 40. Over a translucent bar the green box is too faint at half size
-
-In a messenger app's chat screen (iOS 27.2), `type` into the message field and `press` on its send
-button both stopped with "could not measure the element". The field and button sit in the translucent
-bottom bar. The green box was drawn, but its border there is only 1–2 px thick and raises the green score
-by about 45, and much less over the button's yellow fill. Halving the frame averages the border with its
-neighbors down to about 22, under the threshold of 40, so nothing was found. The yellow preview box
-didn't help either: the bar washes it out, and on the yellow button it doesn't stand out.
-
-At full size and a threshold of 25, the field measured 704x98 and the send button 98x98, with the
-blinking text cursor left out. `greenBox` now runs that pass when the half-size pass finds nothing, so
-the extra full-size cost is paid only on screens like this.
-
-### 41. Sweeping from the first element scrolls a chat to its oldest messages
-
-A messenger app's chat screen (iOS 27.2) opens scrolled to the newest message, but `ui` (and the list
-printed after `press`) starts with "move to first", so focus went to the header and then the oldest
-loaded message, and the chat scrolled all the way up. The first 20 were the oldest messages; the newest
-ones and the input field needed `--more`. In a long chat this may also make the app load older history.
-
-- **"Move to last" works on such screens.** In that chat it went to the last bottom-bar button, and
-  `previous` steps went input field → newest message → older, without the chat moving. It still lands on
-  the first element in Settings › General (#37), so `walkFromLast` treats a first `previous` with no
-  event (nothing before the first element, #38) as "last didn't work" and the caller falls back to a
-  sweep from the start.
-- **With the keyboard up, the end of the focus order is the keyboard.** About 40 keys, then the
-  suggestion bar, then the app's own elements, so a sweep of the last 20 got only keys. Keys have the
-  app's pid and no numeric traits (#38). Return, space and delete do carry language-independent
-  identifiers (`Return`, `space`, `delete`), so the localized trait text is read off one of them (the
-  last part of its description, "Keyboard Key" in the device's language) and the leading run of elements carrying it,
-  plus unnamed ones between keys, is skipped. Walks from the end (`end()`) skip it the same way.
-- **Stepping back 20 elements scrolls the chat up by 20 elements.** With the keyboard up, a message
-  that had just been sent ended up off screen. After the sweep, focus walks forward to the last swept
-  element so the chat is back at the bottom (about 1 s).
-- In a list taken from the end, `--more` walks backward from its earliest element and puts what it
-  finds in front, and after an action the older messages that slide into the window aren't reported as
-  `added`. A list from the end applies to that screen: when an action leads to a different screen, the
-  new one is listed from the start as usual.
-
 ### 42. A row can move between measuring and tapping
+
+Written for the accessibility path (`AXWalker` and the preview and focus boxes, archived as #36–37).
+What today's code keeps is the comparison in the second bullet: `ScreenCapture.sameArea`, which `press`
+runs on every line before tapping (#48).
 
 In a messenger app's chat list (iOS 27.2), `press` on a pinned chat opened the chat three rows above
 it. Measured again later, the rect was right every time, so the list most likely moved after measuring
@@ -654,19 +400,6 @@ and forth.
   that row, and the old rect was used, which is the original bug. Now it waits for the screen to settle,
   steps away and back so the green box is drawn at the new position, and measures again. If the element
   is still moving after three tries, it stops with "kept moving" instead of tapping.
-
-### 43. `back`'s edge swipe ran a chat row's swipe action
-
-In a messenger app's chat list, a root screen with no back gesture, `back` found no `BackButton`
-identifier and fell through to the edge swipe, which started at 45% of the screen height. A chat row
-was there, and dragging it to the right ran the row's leading swipe action, "Mark as unread". The
-screen changed (an unread badge), so `back` even reported "Back (edge swipe)".
-
-- Moving the swipe up to navigation-bar height fixed that screen but not the idea: any swipe can land
-  on something that reacts to it. `back` no longer swipes. After the `BackButton` identifier it looks
-  for a button **labeled** as back among the first elements (the messenger's chat screen says "Previous,
-  Button" in the device's language); apps that don't use the system back button still label theirs. Only the whole name counts
-  ("Previous month" doesn't). If neither is found, it presses nothing (see #45 for what came after).
 
 ### 44. Our own RSD handshake cut Xcode off from the device
 
@@ -699,31 +432,11 @@ code (tunnel assertion, `nettop` port lookup, handshake) is gone. Details found 
   MobileDevice instead, which leaves `remoted` alone. The service connection outlives the lockdown
   session, but invalidating it silences the DTX session, so it is held until the socket closes.
 
-### 45. The top-left guess named the title, and some back buttons have only the previous title
-
-When `back` found neither an identifier nor a "Back" label, it reported the top-left element as the
-likely back button. On a SwiftUI detail screen that was the navigation title ("Details, Header"), not
-the back button next to it ("Probe, Button"); an agent following the hint would press the title.
-
-A toolbar back button an app draws itself (`navigationBarBackButtonHidden` + a leading button) has no
-identifier and is named after the previous screen, like the system one. Its name says nothing in any
-language, but we saw the previous screen: `UIState.trail` keeps the first four names of each screen
-we left within the app, pops when the screen comes back, and `back` presses a leading element whose
-name is among the top entry's. Two screens count as the same only if they share two names (or are
-identical): a back button shares exactly one name, the previous title, with the screen it returns to.
-The top-left guess is gone; with nothing found, `back` prints the list and presses nothing.
-
-In the end the `back` command was removed. The trail can be wrong whenever the screen changed without
-a list being taken (the user touched the device, `touch`, `swipe`), and then a button sharing the
-previous title gets pressed. The agent has seen where it came from, so SKILL.md describes what a back
-button looks like (a leading button named after the previous screen, "Back", Close/Cancel on sheets)
-and the agent presses it with `press`.
-
 ### 46. A notification banner over the top of the screen takes the tap
 
 A banner covers roughly 6–15% from the top of an iPhone for about five seconds. `press` on a toolbar
 button while one was down opened the notification's app. The banner is not in the accessibility walk
-(`ui` during a banner listed only the app), and the hit test returns nothing (#35).
+(`ui` during a banner listed only the app), and the hit test returns nothing (#35, archived).
 
 `press`'s moved-since-measuring check (#42) doesn't catch it: the banner is in both frames.
 
@@ -741,49 +454,13 @@ wait and then fail on screens whose top changes on its own. Instead, SKILL.md su
 It also treats `New screen — <another app>` after a press near the top as a banner tap: don't act
 there, `launch` back.
 
-### 47. Looking for a chat's back button swept the chat through its history
-
-A list from the end (`--last`, #41) never reached a chat's back button, which is the first element.
-An agent looked for it with `ui --find`. `--find` swept from the top for up to 100 elements: the
-chat scrolled to its oldest loaded message, and the app kept loading older history.
-
-We probed a messenger chat (iOS 27.2) one move at a time, comparing box-free frames after each:
-
-- **Jumping to the first element** ("move to first") landed on the back button, and the screen didn't
-  move. It held in three runs. Right after `press … --last` opened one chat, though, the jump sent no
-  event: the app had already put focus on the first element, and a jump to where focus is sends nothing
-  (#36). One step (to the title) and a jump back found it, so the code uses `AXWalker.first`.
-- **Stepping on** through the top bar (title, search, call, menu) didn't move it either.
-- **The next step** reached a date separator in the messages, and the whole chat scrolled up.
-- **Jumping to the last element** brought the chat back to the bottom.
-
-You can't tell where the top bar ends without taking that step, so only the first element is safe.
-
-What the code does now:
-
-- A list from the end that doesn't reach the start reads the first element with a single jump, then
-  jumps back to the end (`UIScreen.readHead`).
-- That element is printed above the list, marked as the first element.
-- `press` on it jumps there again instead of walking (`goHead`).
-- In a list from the end, `ui --find` keeps the direction and searches only what has been listed.
-
-## Permissions
-
-DeviceHub.app has **empty** entitlements. All trust is handled by the pairing record and the
-`CoreDeviceService` daemon. `axAuditService.xpc` holds
-`com.apple.private.accessibility.remoteDeviceContent` and others, but the device side has no way to
-verify host entitlements (lockdown/DTX carry no code-signing information), so that is only a local
-macOS gate. In practice a bare client can read everything.
-
-## Reading the screen by OCR
-
 ### 48. OCR lists every line it read; the caller never guesses a string
 
 The first OCR commands (`find`, `tap "text"`) took a string from the caller and tapped the line that
 matched. They often pressed the wrong place: the guess matched several lines (a title and a row with
 the same word), or OCR had misread the line the caller meant. That is why the accessibility list
 replaced them. The accessibility path was then dropped for speed: walking focus to an element and
-measuring the green box (#37) took 5–8 s per `press` and 2–3 s per list, and only the focus order
+measuring the green box (#37, archived) took 5–8 s per `press` and 2–3 s per list, and only the focus order
 was listed, not what the screen showed.
 
 What the code does now:
@@ -832,8 +509,6 @@ What the code does now: when the settle reports a moving area or never settles, 
 frame captured about 1.2 s after the input (`UIScreen.observeAfterAction`, `Settle.early`) and says so.
 Over a screen that settles normally nothing changes. Five tries out of five listed the controls.
 
-## Daemon input pitfalls
-
 ### 50. A long-held HID connection stopped delivering input while still answering PINGs
 
 The daemon used to open `universalhidservice` and `hid.indigo` once and keep them for its whole life,
@@ -863,8 +538,6 @@ so it is opened only when a button is pressed. Repeated `button home` still does
 double press with the per-command close (#17's 0.8 s wait covers it).
 
 If it shows up again, the next step is the device syslog filtered to `dtuhidd` while a tap fails.
-
-## Foldable iPhone
 
 ### 51. The foldable iPhone has two panels, and everything defaulted to the cover one
 
@@ -906,8 +579,6 @@ What the code does now:
 - `InputSession.open` points `HIDService.touchSurface` at the panel's surface.
 - The daemon no longer caches the screen size: folding or turning the phone changes it, and the
   lookup costs about 50 ms over the daemon's held connection (30 ms to connect, 20 ms for the call).
-
-## Controls without text
 
 ### 52. Switches and icons are found by shape, not by a model
 
@@ -968,8 +639,6 @@ ten as the minimum. `--grid-size` still overrides it, and `screenshot --grid` pr
 only when it was given. The saved image stays 720 px wide, so an iPad's cells are smaller on it
 (about 34 px, labels still readable).
 
-## Input timing
-
 ### 54. A new HID connection drops the reports it gets while the device is busy
 
 After #50 the daemon opens `universalhidservice` per command, like a plain CLI run. Taps still went
@@ -1019,8 +688,6 @@ Buttons go through `hid.indigo` and don't wait.
 The losses that led here were on the foldable's cover panel, right after a fresh daemon or an `open`:
 moments when the device was busy.
 
-## Device state
-
 ### 55. A device without its Developer Disk Image refuses every service socket
 
 After a reboot an iPad on Wi-Fi showed up as `connected (no DDI)` in `xcrun devicectl list devices`,
@@ -1050,8 +717,6 @@ Dropping the whole clock line took the "◀ Settings" breadcrumb with it: when a
 one, the iPad puts the way back in front of the clock, and OCR reads "◀ Settings 3:22 PM Sun Nov 8" as
 one line. A clock line starting with ◀ or < keeps the words before the clock (and before its AM/PM
 marker), with a frame cut by their share of the characters.
-
-## Naming icons
 
 ### 57. The on-device model names a cropped icon well and a whole screen badly
 
@@ -1161,7 +826,7 @@ The fill tolerance follows the contrast with the surroundings (half of it, at mo
 light gray chips on white (about 15 apart) took the page for their fill, their corners looked filled,
 and only the dark selected chip was found.
 
-Checked on KakaoTalk's chat list, chat and friends tab, Settings, Calculator and the home screen: chips,
+Checked on a messenger app's chat list, chat and friends tab, Settings, Calculator and the home screen: chips,
 round input buttons and the profile disc are found; rows, widgets and app icons aren't. The full read
 (OCR included) takes 0.6–1.0 s per screen in a release build.
 
@@ -1191,3 +856,278 @@ with plain `ui` and one with `ui --boxes`, before these fixes: 16 commands and n
 32 commands and 4 misses with boxes. Three of the four misses were stale refs from pressing several
 keys without reading the list in between; the boxes neither caused nor prevented them. Both runs spent
 most of their commands on the keypad that wasn't listed.
+
+### 62. Lone digits, gradient keys, tile glyphs, hopping refs and a dead cached tunnel
+
+Found in one session on an iPhone 12 Pro Max (iOS 27.2):
+
+- **The Calculator's digit keys came out as `[circle button]`.** Vision's screen-wide read skips a
+  lone character. About half the single-digit keys had no line, a different half from frame to frame,
+  and the display's `0` was an `[icon]`. Cropping a key and reading it alone wasn't enough: an isolated
+  digit was often read upside down (`9` as "6") or not at all. What reads reliably is the glyph as the
+  last letter of a word. Each unread glyph is turned dark on white and drawn right after a "Key" on its
+  own row, and the rows are stacked in one image (`TextRecognizer.labels(forGlyphs:)`). Two language
+  settings each drop a different glyph now and then, so both run (about 0.05 s each). Trusted results:
+  anything with a digit, or two to four letters. A lone letter or punctuation is more often a misread
+  glyph (`÷` read as ".", a clock face as "O"). A lone "O" counts as zero only on a narrow glyph.
+  Unnamed `[icon]`s get the same read, digits only.
+- **A small glyph matched a symbol**: the `.` key was `[alarm fill]`. A glyph under 0.2 of its button
+  isn't given to the symbol matcher.
+- **The `6` key was dropped as a leading icon.** It sits right before the minus key's label, and
+  `leadingIcon` took that label for the 6's row label. Text on its own button is a key's label, so it
+  no longer counts.
+- **The `÷` key was missing.** The orange keys have a slight gradient. The region seeded at the top
+  covered only part of the key, the sample 4 pt above it was the same orange, and the contrast came out
+  as 3. When an outside sample is within 16 of the fill, the box first grows over that color
+  (`RegionMap.grow`). The same growth rejoins a Settings icon that a gradient split into two halves.
+- **Settings' row icons came out as stray characters** (`*` for Bluetooth, `©`, `®`, `(g))`, `이` for
+  Wi-Fi). One-color rounded squares are now returned as tiles. An OCR line of up to four characters
+  inside a tile, with a label right after the tile, is dropped.
+- **A symbol's filled body listed as a button**: Clock's tab bar gave `[alarm fill]` and a
+  `[circle button]` at the same spot. A generic button inside a named symbol is dropped.
+- **Refs hopped between lines.** Lines were matched in line order, then "same text anywhere". A key
+  whose digit OCR lost became `[circle button]` and took a neighbor key's ref. The `7` key's ref moved
+  to the `7` that appeared in the display. Now the nearest same-text pairs go first, across the whole
+  list. A farther match is accepted only along with the rest of the list. The shift is the median of
+  lines whose text is distinctive and appears once on both sides, and at least two of those are
+  needed.
+- **The first `ui` through the daemon failed with `connection lost (… reset by peer)`.** The tunnel
+  cached while idle was dead. The daemon dropped it, and the same command worked right after. The
+  daemon now runs a read-only command (`ui`, `wait`, `screenshot`, `apps`, `devices`, `clipboard`,
+  `hid-info`) once more on a fresh tunnel, if it failed with a connection error before printing
+  anything. Input commands aren't retried: the input may have reached the device.
+- **Safari's address bar reads the keys as Latin letters** even with the Korean keyboard showing, like
+  Settings' search (#58). Notes' search composes Hangul. SKILL.md points web searches at a search
+  URL.
+
+Not fixed: the home screen's icon artwork (a clock face's numbers, the Maps arrow) still gives
+`[icon]` lines, and the dock's apps have no label to list. SKILL.md already says to use `launch`.
+
+### 63. Things found by running every command on one phone
+
+Second pass on the same iPhone 12 Pro Max (iOS 27.2), going through Settings, Clock, Notes, Safari and
+the appearance, location and paste commands:
+
+- **A picker's selected row couldn't be told from the list.** OCR read Auto-Lock's check mark as "/",
+  "~" or "v" depending on the row, and a chevron as "〉". An OCR line of one or two characters with no
+  digit and no letter but v is given to the symbol matcher, and a match replaces the text
+  (`ScreenElements.symbolNames`).
+- **The status clock stayed in the list under another time zone.** Pinning the location to Cupertino
+  moved the device's clock to Pacific time, so it no longer matched this Mac's. Any `H:MM` starting a
+  short line in the top 3% now counts as the clock. After `location --clear` the device kept Pacific time until an
+  app got a real fix again (opening Maps did it). The signal dots (`••••`) are dropped too.
+- **The Calculator's history button went missing** whenever the device's clock matched this Mac's:
+  controls within four clock-heights of the clock were dropped as status glyphs. Now only those on
+  the clock's own row are.
+- **`type` refused to type into an open note.** Notes' keyboard came out as merged lines ("QWERT",
+  "YU 1", "ASD"), no line was a single character, and the keyboard wasn't found. A wide run of two to
+  ten letters in one case counts as that many keys (`TextRecognizer.keyCount`).
+- **"Hello" came out as "ㅗㄷㅣㅣㅐ" without a word from `type`.** With a Korean hardware layout the
+  HID keys compose jamo wherever the app doesn't force Latin. `type` now looks for the typed word after
+  typing and warns when the screen shows a run of jamo in its place (`KeyboardLanguage.latinAsJamo`).
+- **A page indicator's dot was `[stopwatch fill]`.** An icon under 12 pt isn't given to the symbol
+  matcher.
+- **A weekday button was listed twice or as `[icon]`** (an alarm's repeat row). An icon group around a
+  text line's center is that line's button and is skipped. An unnamed icon that reads as one Hangul
+  syllable is listed as that syllable.
+- **A Settings row's tile glyph merged into the label** ("이 Wi-Fi"). A first word of up to two
+  characters that starts inside a tile is stripped when the line runs well past the tile.
+- **A list row's swipe actions weren't listed, and pressing their captions did nothing.** They are
+  glass capsules with the caption below. The glyph was measured inside the capsule's box, and the page
+  showing in the box's round corners made the "glyph" as big as the button, so the shape was dropped.
+  The glyph is now measured inside a capsule a little smaller than the shape. A short line right under
+  a nameless button names it (`[button] Delete`), the way a switch takes its label.
+- **`paste` left the prompt for the next `ui`.** It now prints the list like the other input commands,
+  so the paste permission prompt shows up in its result (`--no-ui` to skip).
+- **`press 스톱워치` said only "not a ref".** The error now names the refs in the last list whose text
+  matches.
+- **A row right above a floating bar ignores taps.** On Settings' first screen, taps up to about 18 pt
+  above the glass search bar did nothing, while the same row answered a tap a little higher. The tap
+  was sent where intended, so it's the device's hit testing. SKILL.md says to scroll the row up first.
+
+Not fixed: the passcode screen captures as a black image, so the tool says the screen is off. The
+brightness slider has no line. A picker wheel's selected value isn't marked.
+
+### 64. Things found by driving a test app built for it, and two third-party apps
+
+A SwiftUI app with one screen per kind of control (switches, pickers, buttons, fields, lists, sheets,
+custom-drawn controls, gestures, a web form, a grid of icons) and a "Last: …" line that echoes every
+action, then an encyclopedia app and a portal app from the App Store. What broke, and what the code
+does now:
+
+- **A date picker's month grid counted as a keyboard.** A week of single digits ("3 4 5 6 7 8 9") is
+  seven "keys" in a row, so `ui` dropped everything from that row down, the tab bar included, and said
+  the keyboard was up. A calendar always shows the days 10 to 28 and no keyboard has two-digit keys:
+  with eight or more of those on screen, digits and weekday initials stop counting as keys
+  (`TextRecognizer.keyLines`).
+- **A week came out as one line** ("12 13 14"), so only the middle day could be pressed. A line that is
+  nothing but numbers of one or two digits is split into one line per number, each with Vision's own
+  box for it.
+- **A tab bar's selected pill was `[toggle off]`.** It has a switch's size and shape and a few white
+  pixels off-center. A switch's knob is now at least a quarter of it.
+- **Latin words grew a Hangul syllable** ("Cherry옓", "Bordered헸") on blurred or translucent text, and
+  each showed as a changed line. A trailing syllable outside KS X 1001 right after a Latin letter is
+  dropped; real particles are all inside it. Common syllables still slip through ("Gestures쵸").
+- **The same line read twice differed** in case ("Row 2" / "ROW 2") or in one letter ("subtitle of" /
+  "subtitle ot"): removed-and-added pairs in every report, and `press` saying the line was gone.
+  Lines now match ignoring case, and with one differing letter inside a word when the line has eight
+  characters or more (`UIScreen.sameText`). A digit or a lone letter still counts as a change.
+- **A tab bar's icon was ":" in one read, "⅛" in the next, `[icon]` in a third.** Punctuation as tall
+  as an icon is listed as `[icon]`. The clock with the location arrow read into it ("11:30①") is still
+  the status clock.
+- **A password field can't be typed into by `type`.** While a secure field has focus, the keyboard is
+  absent from screen captures, and so is the field's content afterwards: SwiftUI's `SecureField`
+  stays blank, a web page's shows dots. `type --secure` skips the keyboard check and doesn't echo the
+  text. Nothing in the capture says a field is secure, so the agent has to know.
+- **What the HID keys type is per app, both ways** (#58 had one direction). On one iPhone: Dubeolsik
+  in Notes, so "Hello" became loose jamo; Latin in the test app and in the portal app's search, so
+  "홍길동" became `ghdrlfehd`. The on-screen keys always type what they show, so `OnScreenKeys.type`
+  goes run by run:
+  - digits, symbols and spaces by HID (same keys in both layouts);
+  - the first run of letters by HID with the on-screen keyboard in that script, then one read of the
+    screen. Letters that came out in the other script are deleted and that script is tapped from then
+    on. Latin is probed with Latin keys showing because there a Dubeolsik layout leaves loose jamo,
+    one per key, so the count to delete is exact; Hangul is probed with one syllable.
+  - The probe looks only at lines that weren't there before, and for Hangul only at whether the keys
+    show up as a Latin word: a search field kept "vks" while its suggestions listed "판", and OCR read
+    "vks" as "uks" (one wrong letter in three or more is allowed).
+  - The key positions are fitted to the labels OCR read (ten keys across the width, second row half a
+    key in, third two keys in) and nothing is tapped unless six labels sit where that predicts, which
+    rules out an iPad and landscape. There, typing is as before, with the warnings.
+  - On the Latin keys Shift comes on by itself at the start of a sentence; the keys are read again at
+    the start and after `.`, `!`, `?` or a newline, and their case says whether Shift is on.
+  - Tapped Latin words go through autocorrection ("teh" became "the"). The output says to check.
+- **Return after a keyboard switch did nothing.** `ctrl+space` brings up the input-source list for
+  about two seconds, and it takes the Return. `type --enter` waits it out. The list also covers the
+  middle of the screen, so an unclear probe is read again after it's gone.
+- **A swipe action whose glyph OCR read as a character** ("타" for the trash can) wasn't named by its
+  caption. It is now, and a caption that named a button is no longer listed on its own.
+- **A menu's check mark was the first word of its row** ("V Free", "~ Apple"). It is split off and
+  given to the symbol matcher; if that has no name for it (a web page's ticked box), it goes back.
+- **A password's dots flipped between "•" and "."** on every read. A line of only dots is listed as
+  that many "•".
+- **Double tap.** Two commands are too far apart, so `press` and `touch` take `--double`.
+- **More symbols** in the matcher (gear, lock, person, phone, envelope, pencil, flag, tag, cart, map,
+  link, eye, …), and a glyph OCR read as "Q", "x" or "①" is given to it too.
+
+Not fixed: text behind a glass bar comes out as noise that differs per read. A custom-drawn switch or
+decorative disc can get a wrong symbol name (`[stopwatch fill]`). Which segment of a segmented control
+is selected isn't marked. A status icon next to the clock can come out as a syllable. There is no
+pinch. The system number pad's keys are listed (they aren't left out like the keyboard's).
+
+### 65. Things found in three busy third-party apps
+
+A shopping app, a food delivery app and a travel app from the App Store, used without signing in:
+first-run prompts, a web login sheet, search, a product page, an address form, a custom calendar and a
+flight search. Typing mixed Hangul and Latin text (#64) and pressing days in an app-drawn calendar
+worked as they were. What broke, and what the code does now:
+
+- **The status glyphs on the right came out as text** ("이4" in one read, "..이" in the next) whenever
+  the Wi-Fi fan and the battery read as a syllable and a digit. A line of up to four characters on the
+  clock's own row is a status item.
+- **The way back to the previous app read differently every time**: "A App Store", "• App Store",
+  "< App Store". It sits right under an iPhone's clock. A line there whose first word is one character
+  is listed as `◀ App Store`.
+- **A pager's dots were thirteen `[icon]` lines**, and a different number on the next read. Three or
+  more small unnamed icons of one size, evenly spaced in a row, are one line: `[page dots] 13`
+  (`UIScreen.pageDotsMerged`). Which dot is the current one isn't read.
+- **A tab bar without captions listed its icons as letters**: a house as "A", a reload arrow as "C".
+  A lone ASCII letter is `[icon]` when its row has two or more bracketed controls and no word. Digits
+  stay as they are: a keypad key without a button shape sits among `[circle button]`s too, so a
+  person icon read as "0" is still "0".
+- **"^" and "=" as tall as an icon** (a back arrow, a menu icon) are `[icon]`, like the punctuation in
+  #64.
+- **The keyboard's suggestion bar was in the list** ("나", "아", "나는"), changing with every key. Two
+  or three short lines at the thirds of the width, within 56 pt above the keys, are dropped with the
+  keys. A lone line there stays, because a chat's input field sits in the same place.
+- **`launch Name.com` failed (an app whose name has a dot) with "The application failed to launch".** Anything shaped like a dotted
+  identifier was taken for a bundle ID. With exactly one dot, the installed apps are checked for that
+  name first (`InstallationProxy.bundleId`).
+- **A ticked box was "✓" on one row and "~" on the next.** Writing "~" as "✓" was tried and taken
+  back: the same "~" is what OCR makes of an airplane icon before a city's name, and "✓ Seoul" claims
+  a selection. Only "√" is rewritten.
+
+Not fixed here (#66 later added lines for the popup, its close button, check boxes, the current page
+dot and an icon in another color than its word):
+
+- A close button on a translucent disc over a dimmed photo (a promotion popup's ✕) has no line, and
+  nothing in the list says a popup is up. The lines behind it are listed with it; a scroll that
+  changes nothing is the hint. Tap the ✕ by grid cell.
+- An empty check box has no line. Its label is pressable and usually toggles it.
+- An icon right before a word can join it as a syllable ("쓰파리", "뼈 11월 20일").
+- A captioned icon that isn't a filled button (a sign-in provider's logo) is `[icon]` or a wrong
+  symbol name, with its caption on a separate line below.
+- A map inside a system location prompt is read as text (street names) among the prompt's lines.
+
+### 66. State that isn't a control: check boxes, selection, sliders, pager position, popups
+
+#65 left these without lines, so an agent had to open the screenshot for them. All are now read from
+pixels on the Mac, checked on a test app with one screen per case and then against built-in and
+third-party apps for false positives. A `ui` still takes 0.6–0.9 s.
+
+- **Check boxes and radio buttons** (`RegionMap.checkBoxes`), listed as `[checkbox on|off] <label>`.
+  - Empty: a blob 16–32 pt, as wide as high, that fills its box and has the page's own color at its
+    center and a different one on its rim. The outline closes its inside off from the page, so ring
+    and inside are one blob.
+  - Ticked: the same size, filled with the rim's color, with a glyph in the middle that the symbol
+    matcher names `checkmark`.
+  - Both need a text line right after them on the row. Without one, an empty avatar or a color well
+    passed.
+  - What OCR made of the mark ("v", "✓", or as the first word of the label) is dropped.
+  - Not covered: a box whose two states differ only in color (a gray check mark and a colored one).
+  - The line is the box, and pressing taps its center. In the test app that did nothing at first, or
+    toggled another row: an empty box's inside was transparent and not part of the button. That was
+    the app's fault (fixed with a content shape), but a real app can do the same, so SKILL.md says to
+    fall back to the label.
+- **Page dots** (`RegionMap.pageDots`), `[page dots] 2 of 7`. Three or more blobs 4–12 pt high in a
+  row with equal gaps, one of which differs from all the others in color or is wider (a pill). A row
+  where all look alike is an ellipsis or a password and is left alone; rows inside a text line are
+  the dots of ":" and "i". When no dot stands out, #65's `[page dots] 13` is still what's listed.
+- **The selected one of a row** (`ScreenState.selected`), `[selected] <text>`. Three or more short
+  lines on one row, evenly spaced, where exactly one differs from every other in what's behind it
+  (a segmented control's pill, a chip, a picked day) or in text color, and the others agree.
+  - Text color alone counts only with more evidence: a bar under the item, or the row is in the
+    bottom 12% of the screen (a tab bar). Without that, one bold store name among five was "selected",
+    and so was a red price.
+  - A number needs something behind it: today's date in red and the current hour in bold aren't
+    choices.
+  - The color behind a line is the most common one along its frame's edge. Taken over the whole
+    frame, a filled glyph's own body was the "background", and Clock's alarm icon was selected.
+  - Text color and background are judged separately. Over a glass tab bar the backgrounds all differ
+    a little, which hid a tab that was plainly tinted.
+  - Icons are compared with icons, so a tab bar without captions works too.
+  - A neutral line between two tinted ones is a title between links, and the navigation bar's row
+    (above 96 pt) is skipped.
+- **Sliders** (`ScreenState.sliders`), `[slider 40%]`, framed on the knob so its cell is where to
+  start a drag. Two bars 3–8 pt thick on one line with a gap of 12–64 pt between them.
+  - The bars differ in color (the filled part is tinted). Two bars of one color are a dashed line or
+    a road on a map.
+  - One color right above and below the track along its length. App icons' artwork (a lens, a map)
+    always had two bars and a gap somewhere, on changing ground. The samples stay 8 pt away from the
+    gap: the knob is taller than the track and has a shadow.
+  - A bar is followed pixel to pixel, since a tinted track has a slight gradient, and measured from
+    its middle row: a rounded bar's first row is a blend with the page.
+  - Longest pair first, one slider per bar. A speaker glyph's stroke before the track made a second
+    slider with the filled part.
+  - Within about 3% of the app's own value. At 0% or 100% there is one bar, which can't be told from
+    an underline or a progress bar, so the slider isn't listed.
+- **A popup over a dimmed screen** (`ScreenState.popup`). The list ends with `(a popup is up around
+  F14, over a dimmed screen. On it: @t36 @t37 … )`, also after an action that changed nothing.
+  - An app dims the page with a black layer of 40% or more. White becomes a mid gray, and nothing
+    under the layer is brighter than that gray. So: the most common color is a neutral gray between
+    70 and 190, nothing brighter is as common, and what is brighter sits together in one place of
+    3–75% of the screen.
+  - A navigation or tab bar the layer doesn't cover is ignored; other bright areas mean an ordinary
+    page with a gray part.
+  - Small bright pieces within 72 pt of the card are its close button on a translucent disc. With no
+    flat color around it the shape finder never saw it (#65); it gets a `[circle button]` line.
+  - Not looked for: the lighter dimming behind a system alert or sheet (white stays above 190, as
+    light as a keyboard), and dark mode, where the page is black either way. Their buttons are listed
+    anyway.
+- **An icon read as a word's first letter** ("쓰파리" for an airplane before "파리"). When a line's
+  first character isn't ASCII and has another text color than the rest on the same background, it's
+  listed as `[icon]` and the rest as its own line (`TextRecognizer.lines`). An icon in the text's own
+  color still joins the word.
+
+Not fixed: a slider at either end. Selection shown only by weight or size. Tabs that OCR merges into
+one line ("Chicken Chinese" as a single line) can hide which one is selected. A popup in dark mode.
