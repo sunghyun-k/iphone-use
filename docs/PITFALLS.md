@@ -34,7 +34,7 @@ already broken once.
 | Touch coordinates, panels and the grid | #8, #9, #10, #23, #51, #53 |
 | HID delivery and timing (lost taps and keys) | #15, #16, #17, #18, #50, #54 |
 | Scrolling and swipes | #24, #31, #33 |
-| Typing: layouts, Hangul, on-screen keys, paste | #11, #18, #30, #32, #58, #63, #64 |
+| Typing: layouts, Hangul, on-screen keys, paste | #11, #18, #30, #32, #58, #63, #64, #68 |
 | Telling a keyboard from a keypad or a calendar; the suggestion bar | #31, #61, #63, #64, #65 |
 | Reading the screen: OCR lines, status items, the diff after an action | #48, #56, #62, #63, #64, #65, #66 |
 | Controls without text: switches, symbols, buttons by shape | #52, #59, #60, #61, #62, #63, #64, #65 |
@@ -1157,3 +1157,26 @@ user to set Auto-Lock to Never works but is one more chore, so we looked for a w
 The daemon sends one every 20 s to each device that got a command in the last 5 minutes
 (`KeepAwake`, `daemon --keep-awake`). It only runs in the daemon; a plain CLI run doesn't keep the
 device awake between commands.
+
+### 68. Latin typed as jamo with no warning: a suggestion echoed the word, and merged key labels
+
+Two failures found by driving third-party apps, both on an iPhone whose HID keys typed Dubeolsik
+there:
+
+- **A translator echoed the word.** "Where is the nearest subway station?" came out as
+  "ㅉㅗㄷㄱㄷㅑㄴ…", and the app at once listed "did you mean: where is the nearest subway station?"
+  under it. Both the probe (`OnScreenKeys.type`) and the warning (`KeyboardLanguage.latinAsJamo`)
+  took the word on the screen as proof the letters came out as letters, so the rest was typed as
+  jamo too and nothing was printed. Now a line whose Hangul, read back as Dubeolsik keys, spells the
+  typed letters settles it: the whole first word for the probe, the first or last five letters for
+  the warning (fewer letters turn up in ordinary Korean: "dks" is just 안).
+- **OCR merged the Latin key labels.** Settings' search (the bar sits right above the keyboard) read
+  the Latin keyboard as "QWERT", "• P", "ASDF", "GH", "J", "K", "Z", "X C", "V", "BN", "M". `fit`
+  counted only single-letter lines, found five keys, needed six, and gave up tapping, so the HID keys
+  typed "Bluetooth" as "ㅠㅣㅕㄷㅅㅐㅐㅅㅗ". A line of 2–10 letters is now split into labels spread
+  evenly across it, the first and last half a label in from its ends (`OnScreenKeys.labels`). The
+  same applies to merged jamo labels.
+
+Checked afterwards on that device: "Where is the nearest subway station?" in the translator,
+"abcde", "Wi-Fi 설정" and "Bluetooth" in Settings' search, and "대한민국 Seoul 지하철" in an
+encyclopedia app's search, all typed as given.

@@ -31,14 +31,14 @@ struct OnScreenKeys {
         var seen: [[CGFloat]] = [[], [], []]
         var capitals = 0, small = 0
         for line in lines where line.frame.midY >= top - height * 0.005 {
-            let text = line.text.trimmingCharacters(in: .whitespaces)
-            guard text.count == 1, let label = text.first else { continue }
-            for (index, row) in rows.enumerated() {
-                let labels = Array(language == .korean ? row.jamo : row.latin)
-                guard let column = labels.firstIndex(of: Character(label.lowercased())) else { continue }
-                if abs(line.frame.midX - (Double(column) + row.first) * pitch) < pitch * 0.3 {
-                    seen[index].append(line.frame.midY)
-                    if label.isUppercase { capitals += 1 } else { small += 1 }
+            for (label, x) in labels(of: line) {
+                for (index, row) in rows.enumerated() {
+                    let labels = Array(language == .korean ? row.jamo : row.latin)
+                    guard let column = labels.firstIndex(of: Character(label.lowercased())) else { continue }
+                    if abs(x - (Double(column) + row.first) * pitch) < pitch * 0.3 {
+                        seen[index].append(line.frame.midY)
+                        if label.isUppercase { capitals += 1 } else { small += 1 }
+                    }
                 }
             }
         }
@@ -59,6 +59,20 @@ struct OnScreenKeys {
             }
         }
         return OnScreenKeys(keys: keys, shift: CGPoint(x: pitch * 0.7, y: third), uppercase: capitals > small)
+    }
+
+    /// The key labels in one OCR line, with the center x of each. OCR often reads neighboring keys as
+    /// one line ("QWERT", "BN", "X C"): with only single-letter lines counted, Settings' search found
+    /// five Latin keys, gave up tapping, and the HID keys typed jamo (PITFALLS #68). The labels in such
+    /// a line are taken as evenly spaced, the first and last half a label in from its ends (a label is
+    /// about as wide as the line is tall).
+    private static func labels(of line: TextRecognizer.Line) -> [(Character, CGFloat)] {
+        let text = line.text.filter { !$0.isWhitespace && !"•·".contains($0) }
+        if text.count == 1, let label = text.first { return [(label, line.frame.midX)] }
+        guard (2...10).contains(text.count), text.allSatisfy(\.isLetter) else { return [] }
+        let inset = min(line.frame.height, line.frame.width / Double(text.count)) / 2
+        let step = (line.frame.width - inset * 2) / Double(text.count - 1)
+        return text.enumerated().map { ($1, line.frame.minX + inset + Double($0) * step) }
     }
 
     private func touch(_ point: CGPoint, input: InputSession) throws {
@@ -250,7 +264,12 @@ struct OnScreenKeys {
                     let hangul = new.contains { line in
                         line.unicodeScalars.contains { (0x3131...0x3163).contains($0.value) || (0xAC00...0xD7A3).contains($0.value) }
                     }
-                    if hangul, !new.contains(where: { $0.localizedCaseInsensitiveContains(word) }) {
+                    // The jamo spelling the word's keys settle it even with the word on the screen too: a
+                    // translator listed "where" as a suggestion under "ㅉㅗㄷㄱㄷ", and the word check
+                    // alone kept typing jamo (PITFALLS #68).
+                    let spelled = run.count >= 2
+                        && new.contains { KeyboardLanguage.hangulKeys($0).contains(word.lowercased()) }
+                    if spelled || hangul && !new.contains(where: { $0.localizedCaseInsensitiveContains(word) }) {
                         layout = .korean
                         try backspace(run.count)
                     } else {

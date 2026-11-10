@@ -87,7 +87,12 @@ enum KeyboardLanguage: String {
     /// The line showing Latin letters that came out as Hangul jamo, if any: the typed word ("Hello") is
     /// nowhere on the screen and a line has loose jamo. On a device whose keyboard layout is Dubeolsik,
     /// "Hello" typed into a note came out as "ㅗㄷㅣㅣㅐ" with no word from `type` (PITFALLS #63).
+    ///
+    /// A line whose Hangul, read back as Dubeolsik keys, spells the typed letters is flagged even when
+    /// the word is on the screen too: a translator showed "did you mean: where is the nearest subway
+    /// station?" under the jamo, and the word check alone printed no warning (PITFALLS #68).
     static func latinAsJamo(_ lines: [String], intended: String) -> String? {
+        if let line = lines.first(where: { spellsAsKeys($0, intended: intended) }) { return line }
         let words = intended.split(whereSeparator: { !($0.isASCII && $0.isLetter) }).filter { $0.count >= 2 }
         guard let slice = words.max(by: { $0.count < $1.count }) else { return nil }
         let word = String(slice)
@@ -95,5 +100,21 @@ enum KeyboardLanguage: String {
         return lines.first { line in
             line.unicodeScalars.filter { (0x3131...0x3163).contains($0.value) }.count >= 2
         }
+    }
+
+    /// True when the line's Hangul, turned back into Dubeolsik keys, contains the start or the end of
+    /// the typed letters ("ㅉㅗㄷㄱㄷ" → "where"). Only Hangul counts, so the letters themselves on the
+    /// screen don't match. Five letters: shorter runs turn up in ordinary Korean ("dks" is just 안), so
+    /// shorter text is left to the word check.
+    private static func spellsAsKeys(_ line: String, intended: String) -> Bool {
+        let letters = String(intended.filter { $0.isASCII && $0.isLetter }).lowercased()
+        guard letters.count >= 5 else { return false }
+        let keys = hangulKeys(line)
+        return keys.contains(String(letters.prefix(5))) || keys.contains(String(letters.suffix(5)))
+    }
+
+    /// The line's Hangul as the Dubeolsik keys that type it, lowercased; everything else is dropped.
+    static func hangulKeys(_ line: String) -> String {
+        line.compactMap { HangulKeys.keys(for: $0) }.joined().lowercased()
     }
 }
