@@ -9,9 +9,9 @@ Controls that have no text are found by their shape and listed too: switches, ch
 common icons, the selected tab (`[toggle on] Wi-Fi`, `[chevron left]`, `[selected] Today`). `press @t5` taps line 5 and reports what changed. Anything
 else is tapped by grid cell (`touch --cell G21`).
 
-iphone-use runs on the same private stack that Xcode's **Device Hub** uses. It needs no
-entitlements, no `sudo`, no code signing, no app on the device and no WebDriverAgent. It needs only a
-paired device with Developer Mode on.
+iphone-use runs on the same private stack that Xcode's **Device Hub** uses. It needs no Apple
+Developer account, no entitlements, no `sudo`, no code signing, no app on the device and no
+WebDriverAgent. It needs only a paired device with Developer Mode on.
 
 > **Status:** experimental. The tool depends on undocumented Apple services that can change with any
 > Xcode or iOS release. Verified with Xcode 27 on iPhones (iOS 27.2 and 27.3, one of them foldable)
